@@ -447,13 +447,10 @@ const downloadCheckRoute = createRoute({
     "Checks if a single ID is available for download in S3. Add ?sentry_test=true to trigger an error for Sentry testing.",
   request: {
     query: z.object({
-      sentry_test: z
-        .string()
-        .optional()
-        .openapi({
-          description:
-            "Set to 'true' to trigger an intentional error for Sentry testing",
-        }),
+      sentry_test: z.string().optional().openapi({
+        description:
+          "Set to 'true' to trigger an intentional error for Sentry testing",
+      }),
     }),
     body: {
       content: {

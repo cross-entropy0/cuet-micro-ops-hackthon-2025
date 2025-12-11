@@ -18,12 +18,12 @@ This microservice simulates a **real-world file download system** where processi
 
 When you deploy this service behind a reverse proxy (Cloudflare, nginx, AWS ALB), you'll encounter:
 
-| Problem | Impact |
-|---------|--------|
+| Problem                 | Impact                                        |
+| ----------------------- | --------------------------------------------- |
 | **Connection Timeouts** | Cloudflare's 100s timeout kills long requests |
-| **Gateway Errors** | Users see 504 errors for slow downloads |
-| **Poor UX** | No progress feedback during long waits |
-| **Resource Waste** | Open connections consume server memory |
+| **Gateway Errors**      | Users see 504 errors for slow downloads       |
+| **Poor UX**             | No progress feedback during long waits        |
+| **Resource Waste**      | Open connections consume server memory        |
 
 **Try it yourself:**
 
@@ -490,13 +490,13 @@ DOWNLOAD_DELAY_MAX_MS=200000
 
 ## API Endpoints
 
-| Method | Endpoint                | Description                              |
-| ------ | ----------------------- | ---------------------------------------- |
-| GET    | `/`                     | Welcome message                          |
-| GET    | `/health`               | Health check with storage status         |
-| POST   | `/v1/download/initiate` | Initiate bulk download job               |
-| POST   | `/v1/download/check`    | Check single file availability           |
-| POST   | `/v1/download/start`    | Start download with simulated delay      |
+| Method | Endpoint                | Description                         |
+| ------ | ----------------------- | ----------------------------------- |
+| GET    | `/`                     | Welcome message                     |
+| GET    | `/health`               | Health check with storage status    |
+| POST   | `/v1/download/initiate` | Initiate bulk download job          |
+| POST   | `/v1/download/check`    | Check single file availability      |
+| POST   | `/v1/download/start`    | Start download with simulated delay |
 
 ### Testing the Long-Running Download
 

@@ -14,6 +14,11 @@ import { secureHeaders } from "hono/secure-headers";
 import { timeout } from "hono/timeout";
 import { rateLimiter } from "hono-rate-limiter";
 
+// Type declarations for Hono context variables
+type Variables = {
+  requestId: string;
+};
+
 // Helper for optional URL that treats empty string as undefined
 const optionalUrl = z
   .string()
@@ -74,7 +79,7 @@ const otelSDK = new NodeSDK({
 });
 otelSDK.start();
 
-const app = new OpenAPIHono();
+const app = new OpenAPIHono<{ Variables: Variables }>();
 
 // Request ID middleware - adds unique ID to each request
 app.use(async (c, next) => {
@@ -92,9 +97,16 @@ app.use(
   cors({
     origin: env.CORS_ORIGINS,
     allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+    allowHeaders: [
+      "Content-Type", 
+      "Authorization", 
+      "X-Request-ID",
+      "traceparent",  // W3C Trace Context
+      "tracestate",   // W3C Trace Context vendor data
+    ],
     exposeHeaders: [
       "X-Request-ID",
+      "traceparent",  // Expose for frontend correlation
       "X-RateLimit-Limit",
       "X-RateLimit-Remaining",
     ],

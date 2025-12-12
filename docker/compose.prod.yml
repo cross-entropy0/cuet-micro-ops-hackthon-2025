@@ -47,6 +47,7 @@ services:
       - ../.env
     environment:
       - NODE_ENV=production
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://delineate-jaeger:4318
       - S3_ENDPOINT=http://delineate-minio:9000
       - S3_ACCESS_KEY_ID=minioadmin
       - S3_SECRET_ACCESS_KEY=minioadmin
@@ -55,6 +56,38 @@ services:
     depends_on:
       delineate-minio-init:
         condition: service_completed_successfully
+      delineate-jaeger:
+        condition: service_started
+    networks:
+      - delineate-network
+    restart: unless-stopped
+
+  delineate-jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: delineate-jaeger-prod
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - delineate-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.prod
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:3000}
+      - VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
+      - VITE_SENTRY_ENABLED=${VITE_SENTRY_ENABLED:-true}
+      - VITE_OTEL_EXPORTER_URL=${VITE_OTEL_EXPORTER_URL:-http://localhost:4318/v1/traces}
+    depends_on:
+      - delineate-app
+      - delineate-jaeger
     networks:
       - delineate-network
     restart: unless-stopped

@@ -112,19 +112,19 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: delineate-hackathon-challenge:${{ github.sha }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: "trivy-results.sarif"
 
       - name: Run Trivy vulnerability scanner (table output)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: delineate-hackathon-challenge:${{ github.sha }}
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
+          format: "table"
+          severity: "CRITICAL,HIGH"

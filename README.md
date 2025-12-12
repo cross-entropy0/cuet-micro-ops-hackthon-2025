@@ -529,6 +529,7 @@ Our automated CI/CD pipeline runs on every push and pull request:
 ```
 
 **Pipeline Features:**
+
 - ✅ Automatic linting (ESLint + Prettier)
 - ✅ E2E test execution with mock S3
 - ✅ Docker production image build
@@ -558,21 +559,25 @@ docker build -f docker/Dockerfile.prod .
 ### Fixing CI Failures
 
 **Linting Errors:**
+
 ```bash
 npm run lint:fix  # Auto-fix ESLint issues
 ```
 
 **Formatting Errors:**
+
 ```bash
 npm run format    # Auto-format with Prettier
 ```
 
 **Test Failures:**
+
 ```bash
 npm run test:e2e  # Run tests locally to debug
 ```
 
 **Security Vulnerabilities:**
+
 - Check the GitHub Security tab for Trivy scan results
 - Update dependencies: `npm audit fix`
 - Review Dockerfile for base image updates

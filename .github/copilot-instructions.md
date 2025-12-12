@@ -147,11 +147,41 @@ Document solutions for handling long-running downloads (polling, websockets, web
 
 ### Challenge 3: CI/CD Pipeline
 
-Extend [.github/workflows/ci.yml](../.github/workflows/ci.yml) with deployment stages.
+The existing CI pipeline ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) includes:
+
+- **Lint stage**: ESLint + Prettier in Node 24 containers
+- **Test stage**: E2E tests with mock S3 (`S3_BUCKET_NAME=""`)
+- **Build stage**: Docker image build with GitHub Actions caching
+- **Security stage**: Trivy vulnerability scanning (bonus implementation)
+
+**Key CI characteristics:**
+
+- Uses `container: node:24-slim` strategy (not `actions/setup-node`)
+- Tests accept both healthy and unhealthy storage states (permissive for CI)
+- Docker caching via `type=gha` for faster builds
+- Missing: `workflow_dispatch` trigger, test artifacts upload
+
+**Enhancement opportunities:**
+
+- Add manual trigger support
+- Upload test artifacts on failure
+- Implement deployment stage (SSH to VM)
+- Add strict integration tests for production verification
+
+**Important distinction:**
+
+- CI tests run in mock mode (no MinIO required)
+- Production verification requires separate integration tests
+- Health endpoint returns `"storage":"error"` in CI (acceptable)
+- Production must return `"storage":"ok"` for Challenge 1 points
 
 ### Challenge 4: Observability (Bonus)
 
-Implement metrics, structured logging, or enhanced tracing beyond existing Jaeger setup.
+Current implementation includes:
+
+- **Sentry**: Test endpoint `/v1/download/check?sentry_test=true` triggers intentional error
+- **OpenTelemetry**: Traces sent to Jaeger at `http://delineate-jaeger:4318`
+- **Request correlation**: `x-request-id` header propagated through request lifecycle
 
 ## Key Files Reference
 
@@ -187,3 +217,31 @@ Implement metrics, structured logging, or enhanced tracing beyond existing Jaege
 - All tests run in Node 24 containers (GitHub Actions)
 - E2E tests use mock S3 mode (empty `S3_BUCKET_NAME`)
 - Docker build cached via GitHub Actions cache
+- **Test permissiveness**: CI accepts `"storage":"error"` to allow testing without MinIO
+- **Trivy scanning**: Security vulnerabilities reported to GitHub Security tab
+
+### CI vs Production Testing
+
+**CI Environment (GitHub Actions):**
+
+- Purpose: Code quality, basic functionality
+- Storage: Mock mode (no actual S3)
+- Health check: Accepts both "ok" and "error"
+- When: Every push and pull request
+
+**Production Environment (VM):**
+
+- Purpose: Challenge completion verification
+- Storage: Real MinIO/RustFS required
+- Health check: Must return `"storage":"ok"`
+- Verification: Manual testing or deployment integration tests
+
+### Deployment Considerations
+
+When implementing Challenge 3 deployment:
+
+- **SSH authentication**: Requires properly formatted private key with BEGIN/END headers
+- **Key permissions**: SSH directory must be `chmod 700`, key file `chmod 600`
+- **Heredoc issues**: Use single quotes with explicit `-i` flag instead of heredocs
+- **Health check retries**: VM startup can take 15-30s after deployment
+- **Git operations**: Ensure VM can pull from repository (credentials configured)

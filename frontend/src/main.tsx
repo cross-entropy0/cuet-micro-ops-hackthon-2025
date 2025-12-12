@@ -1,13 +1,13 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import * as Sentry from '@sentry/react'
-import './index.css'
-import App from './App.tsx'
-import { ErrorBoundary } from './components/ErrorBoundary.tsx'
-import { initializeOTEL } from './lib/otel'
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import * as Sentry from "@sentry/react";
+import "./index.css";
+import App from "./App.tsx";
+import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
+import { initializeOTEL } from "./lib/otel";
 
 // Initialize OpenTelemetry first (for W3C Trace Context propagation)
-initializeOTEL()
+initializeOTEL();
 
 // Initialize Sentry
 Sentry.init({
@@ -25,13 +25,15 @@ Sentry.init({
     }),
   ],
   profilesSampleRate: 1.0,
-  enabled: import.meta.env.MODE === 'production' || import.meta.env.VITE_SENTRY_ENABLED === 'true',
-})
+  enabled:
+    import.meta.env.MODE === "production" ||
+    import.meta.env.VITE_SENTRY_ENABLED === "true",
+});
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
       <App />
     </ErrorBoundary>
   </StrictMode>,
-)
+);

@@ -98,15 +98,15 @@ app.use(
     origin: env.CORS_ORIGINS,
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: [
-      "Content-Type", 
-      "Authorization", 
+      "Content-Type",
+      "Authorization",
       "X-Request-ID",
-      "traceparent",  // W3C Trace Context
-      "tracestate",   // W3C Trace Context vendor data
+      "traceparent", // W3C Trace Context
+      "tracestate", // W3C Trace Context vendor data
     ],
     exposeHeaders: [
       "X-Request-ID",
-      "traceparent",  // Expose for frontend correlation
+      "traceparent", // Expose for frontend correlation
       "X-RateLimit-Limit",
       "X-RateLimit-Remaining",
     ],

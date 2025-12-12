@@ -1,10 +1,10 @@
-import 'axios'
+import "axios";
 
-declare module 'axios' {
+declare module "axios" {
   export interface InternalAxiosRequestConfig {
     metadata?: {
-      spanContext?: any
-      startTime?: number
-    }
+      spanContext?: any;
+      startTime?: number;
+    };
   }
 }

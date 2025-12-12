@@ -5,6 +5,7 @@
 ---
 
 ## Table of Contents
+
 1. [Problem Analysis](#1-problem-analysis)
 2. [Pattern Selection & Justification](#2-pattern-selection--justification)
 3. [System Architecture](#3-system-architecture)
@@ -20,11 +21,13 @@
 ### Current System Analysis
 
 **Existing Endpoints (from src/index.ts):**
+
 - `POST /v1/download/initiate` (line 418) - Returns jobId immediately but **NO async processing**
 - `POST /v1/download/check` (line 439) - Checks S3 availability synchronously
 - `POST /v1/download/start` (line 527) - **PROBLEMATIC: Holds connection for 10-200 seconds**
 
 **Existing Infrastructure:**
+
 - ✅ OpenTelemetry tracing (lines 72-76) - Full trace support with OTLP exporter
 - ✅ Sentry error tracking (lines 137-140) - Already integrated
 - ✅ S3 mock mode (lines 245-255) - Falls back when no bucket configured
@@ -38,10 +41,11 @@ The `/v1/download/start` endpoint (lines 570-615) implements a **synchronous blo
 
 ```typescript
 // Line 571: Blocking sleep for 10-200 seconds
-await sleep(delayMs);  // This holds the HTTP connection open!
+await sleep(delayMs); // This holds the HTTP connection open!
 ```
 
 **What happens:**
+
 1. Client sends POST request
 2. TCP connection established
 3. Server sleeps for 10-200 seconds (simulating download processing)
@@ -49,6 +53,7 @@ await sleep(delayMs);  // This holds the HTTP connection open!
 5. **Connection held open entire time** → Memory/port exhaustion
 
 **Proxy Timeout Chain:**
+
 ```
 User → Cloudflare (100s timeout) → nginx (60s default) → Node.js (30s REQUEST_TIMEOUT_MS)
                 ↓                       ↓                      ↓
@@ -58,23 +63,27 @@ User → Cloudflare (100s timeout) → nginx (60s default) → Node.js (30s REQU
 ### Real-World Impact
 
 **On Users:**
+
 - No progress feedback - appears frozen for 2+ minutes
 - Browser timeout errors even when processing succeeds server-side
 - Retry attempts create duplicate work (no idempotency)
 - Can't leave page without losing download reference
 
 **On Infrastructure:**
+
 - **Memory exhaustion:** Each connection holds ~50-100 MB (TCP buffers, Node.js context)
 - **Port exhaustion:** Default 65,535 ephemeral ports / 100s per request = max 655 concurrent downloads
 - **Worker starvation:** Event loop blocked = no other requests processed efficiently
 
 **Quantified Problem:**
+
 ```
 100 concurrent downloads × 65s avg duration × 75 MB per connection = 7.5 GB RAM
 At 200+ concurrent: System crashes from OOM (Out of Memory)
 ```
 
 **Under load testing:**
+
 - 50 users: ⚠️ Degraded performance (avg response time 2-3s → 8-10s)
 - 100 users: 🔥 Service instability (timeouts increase to 40%)
 - 200+ users: ❌ Complete failure (502/503 errors, process restarts)
@@ -85,17 +94,16 @@ At 200+ concurrent: System crashes from OOM (Out of Memory)
 
 ### Pattern Comparison Matrix
 
-| Criteria | Polling | WebSocket | Webhook | Weight |
-|----------|---------|-----------|---------|--------|
-| **Simplicity** | 9/10 | 6/10 | 7/10 | 25% |
-| **Infrastructure Cost** | 8/10 | 6/10 | 8/10 | 20% |
-| **User Experience** | 7/10 | 10/10 | 5/10 | 30% |
-| **Scalability** | 9/10 | 7/10 | 9/10 | 15% |
-| **Error Handling** | 8/10 | 6/10 | 9/10 | 10% |
-| **Weighted Score** | **8.0** | **7.4** | **7.3** | - |
+| Criteria                | Polling | WebSocket | Webhook | Weight |
+| ----------------------- | ------- | --------- | ------- | ------ |
+| **Simplicity**          | 9/10    | 6/10      | 7/10    | 25%    |
+| **Infrastructure Cost** | 8/10    | 6/10      | 8/10    | 20%    |
+| **User Experience**     | 7/10    | 10/10     | 5/10    | 30%    |
+| **Scalability**         | 9/10    | 7/10      | 9/10    | 15%    |
+| **Error Handling**      | 8/10    | 6/10      | 9/10    | 10%    |
+| **Weighted Score**      | **8.0** | **7.4**   | **7.3** | -      |
 
 ### 🏆 Recommended Pattern: **Polling with Redis Queue**
-
 
 ### High-Level System Architecture (Async Polling Pattern)
 
@@ -107,23 +115,23 @@ graph TB
         React["React Browser<br/>(Download Button)"]
         Poll["🔄 Poll Status<br/>every 5s"]
     end
-    
+
     subgraph Proxy["🛡️ Reverse Proxy<br/>(Cloudflare/nginx)<br/>Timeout: 10s"]
         ProxyLogic["Route Requests<br/>10s timeout<br/>Rate Limit: 10/min"]
     end
-    
+
     subgraph Service["⚙️ Download Service (Node.js + Hono)"]
         subgraph APILayer["API Process (Main)"]
             Initiate["POST /v1/download/initiate<br/>→ Returns jobId<br/>→ Queues job<br/>⚡ 50ms response"]
             Status["GET /v1/download/status/:jobId<br/>→ Read from Redis<br/>⚡ <1ms response"]
             Download["GET /v1/download/:jobId<br/>→ Redirect to S3<br/>⚡ <1ms response"]
         end
-        
+
         subgraph WorkerLayer["Worker Process (Async)<br/>Can scale to N workers"]
             Worker1["Worker 1<br/>BRPOP queue<br/>Process downloads<br/>Update progress<br/>Handle retries"]
             Worker2["Worker 2..N<br/>Same logic<br/>Independent processing"]
         end
-        
+
         APILayer -->|Enqueue job| Queue["Redis Queue<br/>LPUSH"]
         Queue -->|BRPOP| Worker1
         Queue -->|BRPOP| Worker2
@@ -131,12 +139,12 @@ graph TB
         Worker2 -->|Update status| StatusCache
         Status -->|Read| StatusCache
     end
-    
+
     subgraph Data["💾 Data Layer"]
         Redis["🔴 Redis Cache<br/>(Queue + Job Status)<br/>TTL: 24h<br/>Auto-cleanup"]
         S3["☁️ S3/MinIO Storage<br/>Presigned URLs<br/>Expires: 24h"]
     end
-    
+
     React -->|1. POST /initiate| ProxyLogic
     React -->|3. GET /status| ProxyLogic
     ProxyLogic -->|Forward| Initiate
@@ -148,13 +156,13 @@ graph TB
     Worker2 -->|Check availability| S3
     Download -->|Redirect to| S3
     Poll -->|Every 5s| Status
-    
+
     classDef clientStyle fill:#3B82F6,stroke:#1E40AF,color:#fff,stroke-width:3px
     classDef proxyStyle fill:#F59E0B,stroke:#D97706,color:#fff,stroke-width:3px
     classDef apiStyle fill:#10B981,stroke:#059669,color:#fff,stroke-width:2px
     classDef workerStyle fill:#8B5CF6,stroke:#6D28D9,color:#fff,stroke-width:2px
     classDef storageStyle fill:#EF4444,stroke:#DC2626,color:#fff,stroke-width:2px
-    
+
     class React,Poll clientStyle
     class Proxy,ProxyLogic proxyStyle
     class Initiate,Status,Download apiStyle
@@ -163,11 +171,11 @@ graph TB
 ```
 
 **Why This Diagram Is Correct:**
+
 - Shows clear separation between API process (handles requests) and Worker process (handles processing)
 - API endpoints return immediately (<1s), preventing proxy timeouts
 - Workers pull from queue independently, allowing horizontal scaling
 - Redis acts as central coordinator for both queue and job status
-
 
 ### Justification: Why Polling?
 
@@ -195,23 +203,25 @@ graph TB
 ✅ Stateless - easy to scale horizontally  
 ✅ Works through any proxy/firewall  
 ✅ Lower infrastructure cost (no WebSocket servers)  
-✅ Excellent error recovery (client just polls again)  
+✅ Excellent error recovery (client just polls again)
 
 **Cons:**
 ❌ Slightly delayed feedback (5s polling interval vs instant)  
 ❌ More HTTP requests (one every 5s vs one WebSocket connection)  
 ❌ Not "real-time" - users see progress in 5s increments  
-❌ Polling overhead at scale (mitigated with Redis read replicas)  
+❌ Polling overhead at scale (mitigated with Redis read replicas)
 
 ### When to Switch Patterns?
 
 **Switch to WebSocket if:**
+
 - Need real-time progress (e.g., live video encoding with frame-by-frame updates)
 - Very long jobs (>10 minutes) where 5s polling is too expensive
 - Already using Cloudflare Business/Enterprise plan
 - Building a dashboard that tracks 100+ jobs simultaneously
 
 **Switch to Webhook if:**
+
 - Backend-to-backend integration (no browser)
 - Jobs take hours/days (e.g., ML model training)
 - Client can't poll (firewall restrictions)
@@ -223,6 +233,7 @@ graph TB
 ### Data Flow (Step-by-Step)
 
 **Initial Request (t=0s):**
+
 1. User clicks "Download File 70000" button
 2. React calls `useDownload().initiate(70000)`
 3. POST `/v1/download/initiate` with `{file_id: 70000}`
@@ -250,37 +261,26 @@ graph TB
    ```
 9. React starts polling `GET /v1/download/status/abc-123-def-456` every 5s
 
-**Background Processing (t=0-65s):**
-10. Worker process: `jobId = BRPOP download:queue 0` (blocking wait)
-11. Worker gets `jobId = "abc-123-def-456"`
-12. Load job: `job = HGETALL download:job:abc-123-def-456`
-13. Update status: `HSET download:job:abc-123-def-456 status "processing" startedAt 1702339205`
-14. **Process download with progress updates:**
-    ```typescript
+**Background Processing (t=0-65s):** 10. Worker process: `jobId = BRPOP download:queue 0` (blocking wait) 11. Worker gets `jobId = "abc-123-def-456"` 12. Load job: `job = HGETALL download:job:abc-123-def-456` 13. Update status: `HSET download:job:abc-123-def-456 status "processing" startedAt 1702339205` 14. **Process download with progress updates:**
+``typescript
     for (let progress = 0; progress <= 100; progress += 10) {
       await sleep(random(1000, 12000)); // Simulate work
       await redis.hset(`download:job:${jobId}`, 'progress', progress);
     }
-    ```
-15. Check S3 availability: `s3.headObject({Bucket: 'downloads', Key: 'downloads/70000.zip'})`
-16. Generate presigned URL: `presignedUrl = s3.getSignedUrl('getObject', {expires: 86400})` (24h to match job TTL)
-17. Update final status:
-    ```redis
+    `` 15. Check S3 availability: `s3.headObject({Bucket: 'downloads', Key: 'downloads/70000.zip'})` 16. Generate presigned URL: `presignedUrl = s3.getSignedUrl('getObject', {expires: 86400})` (24h to match job TTL) 17. Update final status:
+`redis
     HSET download:job:abc-123-def-456
       status "completed"
       progress 100
       downloadUrl "https://s3.amazonaws.com/downloads/70000.zip?X-Amz-..."
       completedAt 1702339270
-    ```
+    `
 
-**Client Polling (t=5, 10, 15... 65s):**
-18. Every 5 seconds: `GET /v1/download/status/abc-123-def-456`
-19. API reads from Redis (sub-millisecond):
-    ```redis
+**Client Polling (t=5, 10, 15... 65s):** 18. Every 5 seconds: `GET /v1/download/status/abc-123-def-456` 19. API reads from Redis (sub-millisecond):
+`redis
     HGETALL download:job:abc-123-def-456
-    ```
-20. Returns current state:
-    ```json
+    ` 20. Returns current state:
+`json
     {
       "jobId": "abc-123-def-456",
       "file_id": 70000,
@@ -289,12 +289,9 @@ graph TB
       "createdAt": "2025-12-12T10:00:00Z",
       "startedAt": "2025-12-12T10:00:05Z"
     }
-    ```
+    `
 
-**Completion (t=65s):**
-21. Client polls and gets `status: "completed"`
-22. React auto-redirects: `window.location.href = downloadUrl`
-23. Browser downloads file directly from S3
+**Completion (t=65s):** 21. Client polls and gets `status: "completed"` 22. React auto-redirects: `window.location.href = downloadUrl` 23. Browser downloads file directly from S3
 
 ---
 
@@ -311,38 +308,38 @@ sequenceDiagram
     participant Redis as 🔴 Redis<br/>(Queue + Cache)
     participant Worker as ⚙️ Worker Process
     participant S3 as ☁️ S3/MinIO
-    
+
     User->>React: 1️⃣ Click "Download File 70000"
     React->>Proxy: 2️⃣ POST /initiate {file_id: 70000}
     Note over Proxy: Connection opened, ~5ms
-    
+
     Proxy->>API: 3️⃣ Forward request
     API->>API: 4️⃣ Validate file_id (10ms)
     API->>Redis: 5️⃣ LPUSH queue jobId="abc-123" (2ms)
     API->>Redis: 6️⃣ HSET job:abc-123 {status:"queued", progress:0} (2ms)
-    
+
     API-->>Proxy: 7️⃣ HTTP 200 Response (50ms total) 🎉
     Proxy-->>React: 8️⃣ Return {jobId:"abc-123", status:"queued"}
     React-->>User: ✅ Show spinner "Download queued..."
-    
+
     par Worker Processing (0-65s)
         Note over Worker: t=0-100ms
         Worker->>Redis: A) BRPOP queue (blocking wait)
         Redis-->>Worker: Returns "abc-123"
-        
+
         Note over Worker: t=100-200ms
         Worker->>Redis: B) HGET job:abc-123 (load metadata)
         Redis-->>Worker: {file_id:70000, status:queued}
-        
+
         Worker->>Worker: C) Update status = "processing" (1ms)
         Worker->>Redis: D) HSET job:abc-123 status:"processing" progress:0
-        
+
         Note over Worker: t=200-65000ms<br/>(Simulated download)
         loop Progress Update (every 1-12s)
             Worker->>Worker: Simulate work (random 1-12s delay)
             Worker->>Redis: HSET job:abc-123 progress:X%
         end
-        
+
         Note over Worker: t=65000ms
         Worker->>S3: Check availability (file_70000.zip)
         S3-->>Worker: ✅ File exists, 15MB
@@ -360,7 +357,7 @@ sequenceDiagram
             React->>User: Update progress bar
         end
     end
-    
+
     Note over React: t=65s Poll returns completed
     React->>User: ✅ Download ready!
     User->>React: Click download or auto-redirect
@@ -370,6 +367,7 @@ sequenceDiagram
 ```
 
 **Key Insights from Timeline:**
+
 - **t=0-50ms**: Initiate request completes (API doesn't wait for processing)
 - **t=0-65s**: Worker processes in background (parallel to client polling)
 - **t=5, 10, 15...**: Client polls every 5 seconds (always gets instant <1ms response)
@@ -386,6 +384,7 @@ sequenceDiagram
 **Purpose:** Queue a download job for asynchronous processing
 
 **Request:**
+
 ```typescript
 POST /v1/download/initiate
 Content-Type: application/json
@@ -398,6 +397,7 @@ Content-Type: application/json
 ```
 
 **Success Response (200 OK):**
+
 ```typescript
 {
   "jobId": string,                // UUID v4 format
@@ -409,6 +409,7 @@ Content-Type: application/json
 ```
 
 **Error Responses:**
+
 ```typescript
 // 400 Bad Request - Invalid file_id
 {
@@ -439,11 +440,13 @@ Content-Type: application/json
 **Purpose:** Check the current status and progress of a download job
 
 **Request:**
+
 ```typescript
-GET /v1/download/status/abc-123-def-456
+GET / v1 / download / status / abc - 123 - def - 456;
 ```
 
 **Success Response (200 OK):**
+
 ```typescript
 {
   "jobId": "abc-123-def-456",
@@ -460,6 +463,7 @@ GET /v1/download/status/abc-123-def-456
 ```
 
 **Status Transitions:**
+
 ```
 queued → processing → completed
    ↓          ↓
@@ -467,6 +471,7 @@ queued → processing → completed
 ```
 
 **Error Responses:**
+
 ```typescript
 // 404 Not Found - Job doesn't exist
 {
@@ -490,17 +495,20 @@ queued → processing → completed
 **Purpose:** Download the completed file (redirects to S3 presigned URL)
 
 **Request:**
+
 ```typescript
-GET /v1/download/abc-123-def-456
+GET / v1 / download / abc - 123 - def - 456;
 ```
 
 **Success Response (302 Found):**
+
 ```typescript
 HTTP/1.1 302 Found
 Location: https://s3.amazonaws.com/downloads/70000.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&...
 ```
 
 **Alternative Response (200 OK with file stream):**
+
 ```typescript
 HTTP/1.1 200 OK
 Content-Type: application/zip
@@ -511,6 +519,7 @@ Content-Length: 15728640
 ```
 
 **Error Responses:**
+
 ```typescript
 // 404 Not Found - Job not completed yet or doesn't exist
 {
@@ -536,31 +545,31 @@ This state machine shows all possible job states and valid transitions:
 ```mermaid
 stateDiagram-v2
     [*] --> Queued: POST /initiate\nGenerates jobId\nEnqueues work
-    
+
     Queued --> Processing: Worker picks job\nfrom queue
-    
+
     Processing --> Processing: Progress update\n(0% → 100%)\nevery 1-12s
-    
+
     Processing --> Completed: S3 check OK\nPresigned URL\ngenerated
-    
+
     Processing --> Failed: S3 not found\nOr other error\n(Exception caught)
-    
+
     Completed --> Expired: 24h TTL\nExpires\n(Auto-cleanup)
-    
+
     Failed --> Queued: Retry<br/>(exponential backoff)\n1s → 2s → 4s\n(up to 3 attempts)
-    
+
     Failed --> DeadLetter: Max retries\nexceeded (3x)\nManual intervention\nneeded
-    
+
     DeadLetter --> [*]
     Expired --> [*]
-    
+
     note right of Queued
         ⏳ Waiting in queue
         Position tracked
         EstimatedWait: 10s per job ahead
         TTL: 24h
     end note
-    
+
     note right of Processing
         ⚙️ Active processing
         Progress: 0-100%
@@ -568,14 +577,14 @@ stateDiagram-v2
         Can be retried if fails
         TTL: 24h (extends on activity)
     end note
-    
+
     note right of Completed
         ✅ Ready for download
         downloadUrl: Presigned S3 URL
         Expires after 24h
         User can download multiple times
     end note
-    
+
     note right of Failed
         ❌ Error occurred
         errorMessage: Details
@@ -583,14 +592,14 @@ stateDiagram-v2
         Exponential backoff applied
         Max 3 retries
     end note
-    
+
     note right of DeadLetter
         🔴 Permanently failed
         All 3 retries exhausted
         Admin must investigate
         Job data preserved for 7 days
     end note
-    
+
     note right of Expired
         ⏰ TTL reached
         No activity for 24h
@@ -600,6 +609,7 @@ stateDiagram-v2
 ```
 
 **State Descriptions:**
+
 - **Queued**: Job created, waiting for worker pickup
 - **Processing**: Worker actively processing, progress 0-100%
 - **Completed**: Success, presigned URL available for 24h
@@ -616,11 +626,13 @@ stateDiagram-v2
 **Recommendation:** **Option A - Return 410 Gone with migration guidance**
 
 **Rationale:**
+
 - Forces clients to migrate to async pattern
 - Clear error message guides developers
 - Prevents accidental use of broken synchronous endpoint
 
 **Response (410 Gone):**
+
 ```typescript
 {
   "error": "Gone",
@@ -635,6 +647,7 @@ stateDiagram-v2
 ```
 
 **Alternative Options (Not Recommended):**
+
 - **Option B (301 Redirect):** Confusing - POST to /initiate doesn't return download, returns jobId
 - **Option C (Backward compat):** Keeps the broken pattern alive, defeats the purpose
 
@@ -645,6 +658,7 @@ stateDiagram-v2
 #### GET /health (Enhanced with Redis Check)
 
 **Updated Response:**
+
 ```typescript
 {
   "status": "healthy" | "degraded" | "unhealthy",
@@ -659,42 +673,49 @@ stateDiagram-v2
 ```
 
 **Implementation:**
+
 ```typescript
-app.get('/health', async (c) => {
+app.get("/health", async (c) => {
   const checks: Record<string, string> = {};
-  
+
   // Check S3/MinIO (existing)
-  checks.storage = (await checkS3Availability(70000)).available ? 'ok' : 'error';
-  
+  checks.storage = (await checkS3Availability(70000)).available
+    ? "ok"
+    : "error";
+
   // Check Redis connection
   try {
     await connection.ping();
-    checks.redis = 'ok';
+    checks.redis = "ok";
   } catch (error) {
-    checks.redis = 'error';
+    checks.redis = "error";
   }
-  
+
   // Check queue (can accept jobs)
   try {
     const queueHealth = await downloadQueue.isPaused();
-    checks.queue = queueHealth ? 'error' : 'ok';
+    checks.queue = queueHealth ? "error" : "ok";
   } catch (error) {
-    checks.queue = 'error';
+    checks.queue = "error";
   }
-  
-  const hasErrors = Object.values(checks).includes('error');
-  const status = hasErrors ? 'unhealthy' : 'healthy';
-  
-  return c.json({
-    status,
-    timestamp: new Date().toISOString(),
-    checks,
-    version: '1.0.0',
-  }, hasErrors ? 503 : 200);
+
+  const hasErrors = Object.values(checks).includes("error");
+  const status = hasErrors ? "unhealthy" : "healthy";
+
+  return c.json(
+    {
+      status,
+      timestamp: new Date().toISOString(),
+      checks,
+      version: "1.0.0",
+    },
+    hasErrors ? 503 : 200,
+  );
 });
 ```
 
 **Other Existing Endpoints (No Changes):**
+
 - `GET /` - Welcome message (unchanged)
 - `POST /v1/download/check` - File availability check (unchanged)
 
@@ -728,6 +749,7 @@ EXPIRE download:job:abc-123-def-456 86400  # Auto-delete after 24h
 ```
 
 **Field Descriptions:**
+
 - `file_id`: Original file ID from request
 - `status`: One of: `queued`, `processing`, `completed`, `failed`
 - `progress`: 0-100 (updated every 10%)
@@ -745,6 +767,7 @@ EXPIRE download:job:abc-123-def-456 86400  # Auto-delete after 24h
 #### Job Queue (List or Stream)
 
 **Option A: Simple List (Recommended for <1000 jobs/sec)**
+
 ```redis
 # Queue: FIFO using LPUSH/BRPOP
 LPUSH download:queue:default "abc-123-def-456"
@@ -755,6 +778,7 @@ jobId = BRPOP download:queue:default 0  # 0 = block forever
 ```
 
 **Option B: Redis Streams (Better for >1000 jobs/sec)**
+
 ```redis
 # Add job with metadata
 XADD download:queue * jobId abc-123-def-456 priority normal timestamp 1702339200
@@ -764,6 +788,7 @@ XREADGROUP GROUP workers worker1 COUNT 1 BLOCK 5000 STREAMS download:queue >
 ```
 
 **Option C: Sorted Set (Priority Queue)**
+
 ```redis
 # Score = priority + timestamp (higher priority = lower score)
 ZADD download:queue 1702339200 abc-123-def-456  # Normal priority
@@ -805,7 +830,7 @@ This entity-relationship diagram shows all Redis data structures and their relat
 erDiagram
     REDIS_QUEUE ||--|{ REDIS_JOB : queues_jobs
     REDIS_JOB ||--|{ REDIS_IP_RATELIMIT : tracks_client
-    
+
     REDIS_QUEUE {
         string queue_name "download:queue:default"
         list job_ids "['abc-123', 'def-456', 'ghi-789']"
@@ -813,7 +838,7 @@ erDiagram
         string concurrency "1 worker = 10 parallel"
         string note "BullMQ: List-based queue"
     }
-    
+
     REDIS_JOB {
         string key "download:job:{jobId}"
         string type "Hash"
@@ -831,7 +856,7 @@ erDiagram
         integer ttl "86400 (24 hours)"
         string command "HSET / HGETALL"
     }
-    
+
     REDIS_IP_RATELIMIT {
         string key "download:ip:{client_ip}:requests"
         string type "Sorted Set (with timestamps)"
@@ -841,7 +866,7 @@ erDiagram
         string command "ZCOUNT / ZREMRANGEBYSCORE"
         string cleanup "EXPIRE after 3600s (1 hour)"
     }
-    
+
     REDIS_METADATA {
         string pattern "download:queue:* (multiple priority queues)"
         integer max_jobs "1000 (queue capacity)"
@@ -850,6 +875,7 @@ erDiagram
 ```
 
 **Schema Summary:**
+
 - **Job Queue** (List): Simple FIFO using LPUSH/BRPOP for job ordering
 - **Job Status** (Hash): All job metadata stored in single key with 24h TTL
 - **Rate Limiting** (Sorted Set): Tracks client requests by timestamp for sliding window
@@ -862,6 +888,7 @@ erDiagram
 #### Architecture: BullMQ with Redis
 
 **Why BullMQ?**
+
 - Built on Redis (no extra infrastructure)
 - Automatic retries with exponential backoff
 - Progress tracking built-in
@@ -870,19 +897,21 @@ erDiagram
 - Battle-tested (1M+ downloads/week on npm)
 
 **Installation:**
+
 ```bash
 npm install bullmq ioredis
 ```
 
 **Queue Setup:**
+
 ```typescript
 // lib/queue.ts
-import { Queue, Worker, QueueEvents } from 'bullmq';
-import Redis from 'ioredis';
+import { Queue, Worker, QueueEvents } from "bullmq";
+import Redis from "ioredis";
 
 const connection = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
+  host: process.env.REDIS_HOST || "localhost",
+  port: parseInt(process.env.REDIS_PORT || "6379"),
   maxRetriesPerRequest: null, // Required for BullMQ
   retryStrategy: (times: number) => {
     const delay = Math.min(times * 50, 2000);
@@ -891,29 +920,29 @@ const connection = new Redis({
 });
 
 // Connection event handlers
-connection.on('connect', () => {
-  console.log('✅ Connected to Redis');
+connection.on("connect", () => {
+  console.log("✅ Connected to Redis");
 });
 
-connection.on('error', (error: Error) => {
-  console.error('❌ Redis connection error:', error.message);
+connection.on("error", (error: Error) => {
+  console.error("❌ Redis connection error:", error.message);
   // Don't exit - let retryStrategy handle reconnection
 });
 
-connection.on('close', () => {
-  console.warn('⚠️  Redis connection closed');
+connection.on("close", () => {
+  console.warn("⚠️  Redis connection closed");
 });
 
-connection.on('reconnecting', () => {
-  console.log('🔄 Reconnecting to Redis...');
+connection.on("reconnecting", () => {
+  console.log("🔄 Reconnecting to Redis...");
 });
 
-export const downloadQueue = new Queue('downloads', {
+export const downloadQueue = new Queue("downloads", {
   connection,
   defaultJobOptions: {
-    attempts: 3,  // Retry up to 3 times
+    attempts: 3, // Retry up to 3 times
     backoff: {
-      type: 'exponential',
+      type: "exponential",
       delay: 1000, // 1s, 2s, 4s
     },
     removeOnComplete: {
@@ -933,156 +962,180 @@ Create a new file `scripts/worker.ts` (or `lib/worker.ts`) to run as a separate 
 
 ```typescript
 // scripts/worker.ts
-import { Worker, Job } from 'bullmq';
-import Redis from 'ioredis';
-import { checkS3Availability, generatePresignedUrl } from '../lib/s3';
+import { Worker, Job } from "bullmq";
+import Redis from "ioredis";
+import { checkS3Availability, generatePresignedUrl } from "../lib/s3";
 
 const connection = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
+  host: process.env.REDIS_HOST || "localhost",
+  port: parseInt(process.env.REDIS_PORT || "6379"),
   maxRetriesPerRequest: null,
 });
 
-const worker = new Worker('downloads', async (job: Job) => {
-  const { file_id, jobId, traceId } = job.data;
-  
-  console.log(`[Worker] Processing job ${jobId} for file ${file_id}`);
-  
-  // Update status to processing
-  await job.updateProgress(0);
-  await job.log(`Started processing file_id=${file_id}`);
-  
-  // Simulate download with progress updates
-  for (let progress = 0; progress <= 100; progress += 10) {
-    const delay = Math.floor(Math.random() * 11000) + 1000; // 1-12s
-    await sleep(delay);
-    await job.updateProgress(progress);
-    await job.log(`Progress: ${progress}%`);
-  }
-  
-  // Check S3 availability
-  const s3Result = await checkS3Availability(file_id);
-  
-  if (!s3Result.available) {
-    throw new Error(`File ${file_id} not found in S3`);
-  }
-  
-  // Generate presigned URL (expires in 24 hours to match job TTL)
-  // Note: For production, consider shorter expiration + regeneration endpoint
-  const downloadUrl = await generatePresignedUrl(s3Result.s3Key, 86400);
-  
-  await job.updateProgress(100);
-  
-  return {
-    status: 'completed',
-    downloadUrl,
-    file_id,
-    processingTimeMs: Date.now() - job.timestamp,
-  };
-}, {
-  connection,
-  concurrency: 10, // Process 10 jobs in parallel
-  limiter: {
-    max: 100,      // Max 100 jobs per...
-    duration: 60000, // ...60 seconds
+const worker = new Worker(
+  "downloads",
+  async (job: Job) => {
+    const { file_id, jobId, traceId } = job.data;
+
+    console.log(`[Worker] Processing job ${jobId} for file ${file_id}`);
+
+    // Update status to processing
+    await job.updateProgress(0);
+    await job.log(`Started processing file_id=${file_id}`);
+
+    // Simulate download with progress updates
+    for (let progress = 0; progress <= 100; progress += 10) {
+      const delay = Math.floor(Math.random() * 11000) + 1000; // 1-12s
+      await sleep(delay);
+      await job.updateProgress(progress);
+      await job.log(`Progress: ${progress}%`);
+    }
+
+    // Check S3 availability
+    const s3Result = await checkS3Availability(file_id);
+
+    if (!s3Result.available) {
+      throw new Error(`File ${file_id} not found in S3`);
+    }
+
+    // Generate presigned URL (expires in 24 hours to match job TTL)
+    // Note: For production, consider shorter expiration + regeneration endpoint
+    const downloadUrl = await generatePresignedUrl(s3Result.s3Key, 86400);
+
+    await job.updateProgress(100);
+
+    return {
+      status: "completed",
+      downloadUrl,
+      file_id,
+      processingTimeMs: Date.now() - job.timestamp,
+    };
   },
-});
+  {
+    connection,
+    concurrency: 10, // Process 10 jobs in parallel
+    limiter: {
+      max: 100, // Max 100 jobs per...
+      duration: 60000, // ...60 seconds
+    },
+  },
+);
 
 // Event handlers
-worker.on('completed', (job, result) => {
+worker.on("completed", (job, result) => {
   console.log(`[Worker] Job ${job.id} completed:`, result);
   // Could trigger webhook here if callback_url provided
 });
 
-worker.on('failed', (job, error) => {
+worker.on("failed", (job, error) => {
   console.error(`[Worker] Job ${job?.id} failed:`, error);
   Sentry.captureException(error, {
     tags: { jobId: job?.id, file_id: job?.data.file_id },
   });
 });
 
-worker.on('error', (error) => {
-  console.error('[Worker] Worker error:', error);
+worker.on("error", (error) => {
+  console.error("[Worker] Worker error:", error);
 });
 
 // Validate Redis connection before starting worker
 (async () => {
   try {
     await connection.ping();
-    console.log('✅ Redis connection validated');
-    console.log('✅ Worker started, waiting for jobs...');
+    console.log("✅ Redis connection validated");
+    console.log("✅ Worker started, waiting for jobs...");
   } catch (error) {
-    console.error('❌ Failed to connect to Redis:', error);
-    console.error('⚠️  Make sure Redis is running: docker run -d -p 6379:6379 redis:7-alpine');
+    console.error("❌ Failed to connect to Redis:", error);
+    console.error(
+      "⚠️  Make sure Redis is running: docker run -d -p 6379:6379 redis:7-alpine",
+    );
     process.exit(1);
   }
 })();
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('⚠️  SIGTERM received, closing worker gracefully...');
+process.on("SIGTERM", async () => {
+  console.log("⚠️  SIGTERM received, closing worker gracefully...");
   await worker.close();
   process.exit(0);
 });
 
-process.on('SIGINT', async () => {
-  console.log('⚠️  SIGINT received, closing worker gracefully...');
+process.on("SIGINT", async () => {
+  console.log("⚠️  SIGINT received, closing worker gracefully...");
   await worker.close();
   process.exit(0);
 });
 ```
 
 **API Integration:**
+
 ```typescript
 // In src/index.ts - POST /v1/download/initiate
-import { downloadQueue } from './lib/queue';
+import { downloadQueue } from "./lib/queue";
 
 app.openapi(downloadInitiateRoute, async (c) => {
   const { file_id } = c.req.valid("json");
   const jobId = crypto.randomUUID();
-  const traceId = c.get('traceId'); // From OpenTelemetry middleware
-  
+  const traceId = c.get("traceId"); // From OpenTelemetry middleware
+
   // Add job to queue
-  const job = await downloadQueue.add('process', {
-    file_id,
-    jobId,
-    traceId,
-  }, {
-    jobId, // Use our UUID as BullMQ job ID
-  });
-  
-  return c.json({
-    jobId,
-    status: 'queued',
-    position: await job.getPosition(),
-    estimatedWaitSeconds: (await job.getPosition()) * 10, // Rough estimate
-    createdAt: new Date().toISOString(),
-  }, 200);
+  const job = await downloadQueue.add(
+    "process",
+    {
+      file_id,
+      jobId,
+      traceId,
+    },
+    {
+      jobId, // Use our UUID as BullMQ job ID
+    },
+  );
+
+  return c.json(
+    {
+      jobId,
+      status: "queued",
+      position: await job.getPosition(),
+      estimatedWaitSeconds: (await job.getPosition()) * 10, // Rough estimate
+      createdAt: new Date().toISOString(),
+    },
+    200,
+  );
 });
 
 // GET /v1/download/status/:jobId
 app.openapi(downloadStatusRoute, async (c) => {
   const { jobId } = c.req.param();
-  
+
   const job = await downloadQueue.getJob(jobId);
-  
+
   if (!job) {
-    return c.json({ error: 'Not Found', message: 'Job not found' }, 404);
+    return c.json({ error: "Not Found", message: "Job not found" }, 404);
   }
-  
+
   const state = await job.getState();
   const progress = job.progress as number;
   const result = job.returnvalue;
-  
-  return c.json({
-    jobId,
-    file_id: job.data.file_id,
-    status: state === 'completed' ? 'completed' : state === 'failed' ? 'failed' : state === 'active' ? 'processing' : 'queued',
-    progress,
-    downloadUrl: result?.downloadUrl,
-    errorMessage: job.failedReason,
-    createdAt: new Date(job.timestamp).toISOString(),
-  }, 200);
+
+  return c.json(
+    {
+      jobId,
+      file_id: job.data.file_id,
+      status:
+        state === "completed"
+          ? "completed"
+          : state === "failed"
+            ? "failed"
+            : state === "active"
+              ? "processing"
+              : "queued",
+      progress,
+      downloadUrl: result?.downloadUrl,
+      errorMessage: job.failedReason,
+      createdAt: new Date(job.timestamp).toISOString(),
+    },
+    200,
+  );
 });
 ```
 
@@ -1105,6 +1158,7 @@ Add these scripts to your `package.json`:
 ```
 
 **Local Development:**
+
 ```bash
 # Install concurrently for running multiple processes
 npm install --save-dev concurrently
@@ -1126,59 +1180,59 @@ This flowchart shows the complete worker lifecycle from startup to job completio
 ```mermaid
 flowchart TD
     Start["⚙️ Worker Started<br/>(npm run worker)"] --> Init["Initialize<br/>Redis connection<br/>Validate connection"]
-    
+
     Init --> CheckConn{Redis<br/>Connection<br/>OK?}
     CheckConn -->|NO| Error1["❌ Exit with error<br/>Make sure Redis running"]
     CheckConn -->|YES| Listen["🔄 Listen for jobs<br/>BRPOP download:queue 0<br/>(blocks until job available)"]
-    
+
     Listen --> PopJob["✅ Job received<br/>jobId = 'abc-123'"]
-    
+
     PopJob --> LoadJob["📥 Load job metadata<br/>HGETALL download:job:abc-123"]
     LoadJob --> JobData["Get:<br/>- file_id: 70000<br/>- traceId: otel-xyz<br/>- status: queued"]
-    
+
     JobData --> UpdateStatus1["🔄 Update status<br/>HSET job:abc-123<br/>status='processing'<br/>startedAt=NOW"]
-    
+
     UpdateStatus1 --> ProcessLoop["⚙️ Simulate Download<br/>(For each progress step)"]
-    
+
     ProcessLoop --> Sleep["Wait 1-12 seconds<br/>(random delay)"]
     Sleep --> Progress["📊 Update progress<br/>HSET job:abc-123<br/>progress=X%"]
-    
+
     Progress --> LoopCheck{Progress<br/>< 100%?}
     LoopCheck -->|YES| Sleep
     LoopCheck -->|NO| CheckS3["Check S3<br/>availability"]
-    
+
     CheckS3 --> S3Call["s3.headObject<br/>(verify file exists)"]
-    
+
     S3Call --> S3Check{File<br/>exists<br/>in S3?}
-    
+
     S3Check -->|NO| S3Error["❌ File not found<br/>Throw Error:<br/>S3 exception"]
-    
+
     S3Check -->|YES| GenURL["Generate presigned URL<br/>s3.getSignedUrl<br/>Expires: 24 hours"]
     GenURL --> URLOK["🔗 Got URL:<br/>https://s3.../file.zip?sig=xyz"]
-    
+
     URLOK --> UpdateComplete["✅ Mark completed<br/>HSET job:abc-123<br/>status='completed'<br/>progress=100<br/>downloadUrl=URL<br/>completedAt=NOW"]
-    
+
     UpdateComplete --> EmitEvent["📢 Emit 'completed' event<br/>(for monitoring)"]
     EmitEvent --> LogSuccess["📝 Log success<br/>[Worker] Job abc-123 completed"]
-    
+
     LogSuccess --> Listen
-    
+
     S3Error --> CatchError["⚠️ Exception caught<br/>BullMQ auto-handles"]
     CatchError --> Retry{Retry<br/>Count<br/>< 3?}
-    
+
     Retry -->|YES| ExpBackoff["⏳ Exponential backoff<br/>Attempt 1: 1s delay<br/>Attempt 2: 2s delay<br/>Attempt 3: 4s delay"]
     ExpBackoff --> RetryQueue["Re-enqueue job<br/>Jump back to Listen"]
     RetryQueue --> Listen
-    
+
     Retry -->|NO| DLQ["🔴 Dead Letter Queue<br/>Job moved to failed pool<br/>Admin must investigate<br/>Job data kept 7 days"]
-    
+
     DLQ --> EmitFail["📢 Emit 'failed' event"]
     EmitFail --> LogFail["📝 Log failure"]
     LogFail --> SentryError["📡 Send to Sentry<br/>With tags: jobId, file_id, attempt"]
     SentryError --> Listen
-    
+
     Error1 --> Exit["🛑 Process exits"]
-    
+
     style Start fill:#8B5CF6,color:#fff,stroke:#6D28D9,stroke-width:3px
     style Listen fill:#3B82F6,color:#fff,stroke:#1E40AF,stroke-width:3px
     style PopJob fill:#10B981,color:#fff,stroke:#059669,stroke-width:2px
@@ -1190,6 +1244,7 @@ flowchart TD
 ```
 
 **Worker Lifecycle:**
+
 1. **Startup**: Initialize Redis, validate connection
 2. **Wait**: BRPOP blocks until job available (no polling, efficient)
 3. **Load**: Get job metadata from Redis
@@ -1199,6 +1254,7 @@ flowchart TD
 7. **Error Handling**: Retry with exponential backoff (1s, 2s, 4s), then DLQ
 
 **Error Recovery:**
+
 - BullMQ handles automatic retries with exponential backoff
 - Max 3 retry attempts (matches queue configuration)
 - Failed jobs move to Dead Letter Queue after exhausting retries
@@ -1206,15 +1262,15 @@ flowchart TD
 
 ---
 
-
-
 **Retry Strategy:**
+
 - **Attempt 1 fails**: Wait 1 second, re-enqueue
 - **Attempt 2 fails**: Wait 2 seconds, re-enqueue
 - **Attempt 3 fails**: Wait 4 seconds, re-enqueue
 - **Attempt 4 fails**: Move to Dead Letter Queue, alert admin
 
 **Error Classification:**
+
 - **Transient (retry)**: Network timeouts, temporary S3 issues, worker crashes
 - **Permanent (no retry)**: Invalid file_id, S3 file truly missing, bad data
 
@@ -1223,11 +1279,13 @@ flowchart TD
 ### 5.3 Scalability Configuration
 
 **Single Worker Instance:**
+
 - Concurrency: 10 parallel jobs
 - Throughput: ~650 jobs/hour (avg 65s per job)
 - RAM usage: ~200 MB
 
 **Scaling Calculation:**
+
 ```
 Target: 1000 jobs/hour
 Current: 650 jobs/hour per worker
@@ -1238,6 +1296,7 @@ Workers needed: 10,000 / 650 = 16 workers
 ```
 
 **Horizontal Scaling (Docker Compose):**
+
 ```yaml
 services:
   api:
@@ -1248,17 +1307,17 @@ services:
       REDIS_HOST: redis
     depends_on:
       - redis
-  
+
   worker:
     image: download-service
-    command: npm run worker  # Run worker process
+    command: npm run worker # Run worker process
     environment:
       REDIS_HOST: redis
     depends_on:
       - redis
     deploy:
-      replicas: 4  # Run 4 worker instances
-  
+      replicas: 4 # Run 4 worker instances
+
   redis:
     image: redis:7-alpine
     ports:
@@ -1274,60 +1333,60 @@ This diagram shows how to scale from 1 worker to 16 workers across three deploym
 ```mermaid
 graph TB
     Internet["🌍 Internet<br/>(Users)"]
-    
+
     Internet -->|HTTPS| LB["⚙️ Load Balancer<br/>(Cloudflare/nginx)"]
-    
+
     subgraph Scaling["🚀 SCALING FROM 1 → 4 → 16 WORKERS"]
         subgraph Phase1["PHASE 1: Single Node<br/>(Development/Small Load)"]
             VM1["Single Virtual Machine<br/>(1 CPU, 2GB RAM)"]
-            
+
             API1["🌐 API Process<br/>:3000<br/>Concurrency: 1"]
             Redis1["🔴 Redis<br/>:6379<br/>(in-memory)"]
             Worker1["⚙️ Worker Process<br/>Concurrency: 10<br/>Throughput: 650 jobs/hr"]
-            
+
             VM1 --> API1
             VM1 --> Redis1
             VM1 --> Worker1
-            
+
             Redis1 ---|queue| Worker1
             API1 ---|read/write| Redis1
         end
-        
+
         subgraph Phase2["PHASE 2: Multi-Worker<br/>(Medium Load)"]
             VM2["Virtual Machine<br/>(2 CPU, 4GB RAM)"]
-            
+
             API2["🌐 API Process<br/>:3000"]
             Redis2["🔴 Redis Cluster<br/>:6379-6381<br/>(3 nodes)"]
-            
+
             W2A["⚙️ Worker 1<br/>Concurrency: 10"]
             W2B["⚙️ Worker 2<br/>Concurrency: 10"]
             W2C["⚙️ Worker 3<br/>Concurrency: 10"]
             W2D["⚙️ Worker 4<br/>Concurrency: 10"]
-            
+
             VM2 --> API2
             VM2 --> Redis2
             VM2 --> W2A
             VM2 --> W2B
             VM2 --> W2C
             VM2 --> W2D
-            
+
             Redis2 ---|queue| W2A
             Redis2 ---|queue| W2B
             Redis2 ---|queue| W2C
             Redis2 ---|queue| W2D
             API2 ---|read/write| Redis2
         end
-        
+
         subgraph Phase3["PHASE 3: Distributed<br/>(High Load: 10k jobs/hr)"]
             AppVM["Application VM<br/>(4 CPU, 8GB RAM)"]
-            
+
             API3["🌐 API Process<br/>:3000<br/>Concurrency: 20"]
-            
+
             WorkerVM1["Worker VM 1<br/>(2 CPU, 4GB RAM)"]
             WorkerVM2["Worker VM 2<br/>(2 CPU, 4GB RAM)"]
             WorkerVM3["Worker VM 3<br/>(2 CPU, 4GB RAM)"]
             WorkerVM4["Worker VM 4<br/>(2 CPU, 4GB RAM)"]
-            
+
             W3A["⚙️ Worker 1"]
             W3B["⚙️ Worker 2"]
             W3C["⚙️ Worker 3"]
@@ -1336,9 +1395,9 @@ graph TB
             W3F["⚙️ Worker 6"]
             W3G["⚙️ Worker 7"]
             W3H["⚙️ Worker 8"]
-            
+
             RedisCache["🔴 Redis<br/>(Managed Service)<br/>Redis Cloud Premium<br/>:6379"]
-            
+
             AppVM --> API3
             WorkerVM1 --> W3A
             WorkerVM1 --> W3B
@@ -1348,7 +1407,7 @@ graph TB
             WorkerVM3 --> W3F
             WorkerVM4 --> W3G
             WorkerVM4 --> W3H
-            
+
             RedisCache ---|queue| W3A
             RedisCache ---|queue| W3B
             RedisCache ---|queue| W3C
@@ -1358,20 +1417,20 @@ graph TB
             RedisCache ---|queue| W3G
             RedisCache ---|queue| W3H
             API3 ---|read/write| RedisCache
-            
+
             Monitoring["📊 Monitoring<br/>- Prometheus<br/>- Grafana<br/>- DataDog"]
         end
     end
-    
+
     LB -->|Route| Phase1
     LB -->|Route| Phase2
     LB -->|Route| Phase3
-    
+
     AllPhases["☁️ S3/MinIO<br/>(Shared storage<br/>across all phases)"]
     Phase1 ---|download| AllPhases
     Phase2 ---|download| AllPhases
     Phase3 ---|download| AllPhases
-    
+
     style Phase1 fill:#DBEAFE,stroke:#3B82F6,stroke-width:3px
     style Phase2 fill:#FEF3C7,stroke:#F59E0B,stroke-width:3px
     style Phase3 fill:#D1D5DB,stroke:#374151,stroke-width:3px
@@ -1380,11 +1439,13 @@ graph TB
 ```
 
 **Scaling Path:**
+
 - **Phase 1 (Single Node)**: 1 worker × 650 jobs/hr = 650 jobs/hr
 - **Phase 2 (4 Workers)**: 4 workers × 650 jobs/hr = 2,600 jobs/hr
 - **Phase 3 (16 Workers)**: 16 workers × 650 jobs/hr = 10,400 jobs/hr ✅ Meets 10k target
 
 **Key Insights:**
+
 - Workers scale independently of API
 - Redis becomes bottleneck at Phase 2 (upgrade to cluster)
 - Phase 3 separates API and workers across VMs
@@ -1398,23 +1459,23 @@ graph TB
 
 ```typescript
 // Add trace ID to job for correlation
-import { trace } from '@opentelemetry/api';
+import { trace } from "@opentelemetry/api";
 
 const span = trace.getActiveSpan();
 const traceId = span?.spanContext().traceId;
 
-await downloadQueue.add('process', {
+await downloadQueue.add("process", {
   file_id,
   jobId,
   traceId, // Pass to worker
 });
 
 // In worker, create child span
-const tracer = trace.getTracer('download-worker');
-const span = tracer.startSpan('download_job_processing', {
+const tracer = trace.getTracer("download-worker");
+const span = tracer.startSpan("download_job_processing", {
   attributes: {
-    'job.id': jobId,
-    'file.id': file_id,
+    "job.id": jobId,
+    "file.id": file_id,
   },
 });
 
@@ -1433,7 +1494,7 @@ try {
 
 ```typescript
 // Capture failed jobs with full context
-worker.on('failed', (job, error) => {
+worker.on("failed", (job, error) => {
   Sentry.captureException(error, {
     tags: {
       jobId: job?.id,
@@ -1450,9 +1511,8 @@ worker.on('failed', (job, error) => {
 
 ---
 
-
-
 **Trace Correlation Flow:**
+
 1. Browser request generates trace ID (otel-abc123xyz789)
 2. API creates parent span, passes trace ID to job metadata
 3. Worker loads job, retrieves trace ID, creates child spans
@@ -1461,6 +1521,7 @@ worker.on('failed', (job, error) => {
 6. Jaeger visualizes complete trace tree with timing
 
 **Benefits:**
+
 - Debug slow jobs by viewing exact span durations
 - Correlate frontend actions with backend processing
 - Track jobs across multiple workers (trace ID in Redis)
@@ -1472,24 +1533,24 @@ worker.on('failed', (job, error) => {
 
 ```typescript
 // Using OpenTelemetry Metrics API
-const meter = metrics.getMeter('download-service');
+const meter = metrics.getMeter("download-service");
 
-const jobDuration = meter.createHistogram('download.job.duration', {
-  description: 'Time to complete download job',
-  unit: 'seconds',
+const jobDuration = meter.createHistogram("download.job.duration", {
+  description: "Time to complete download job",
+  unit: "seconds",
 });
 
-const jobCounter = meter.createCounter('download.job.total', {
-  description: 'Total download jobs processed',
+const jobCounter = meter.createCounter("download.job.total", {
+  description: "Total download jobs processed",
 });
 
 // Record metrics
 jobDuration.record(processingTimeMs / 1000, {
-  status: 'completed',
+  status: "completed",
   file_size_mb: Math.floor(fileSize / 1024 / 1024),
 });
 
-jobCounter.add(1, { status: 'completed' });
+jobCounter.add(1, { status: "completed" });
 ```
 
 ---
@@ -1540,31 +1601,31 @@ server {
     # Short timeout for async API endpoints
     location /v1/download/ {
         proxy_pass http://download_service;
-        
+
         # HTTP/1.1 for connection reuse
         proxy_http_version 1.1;
         proxy_set_header Connection "";
-        
+
         # Timeouts (short! All endpoints respond quickly)
         proxy_connect_timeout 5s;
         proxy_send_timeout 10s;
         proxy_read_timeout 10s;  # API responds in <1s
-        
+
         # Headers
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Request-ID $request_id;
-        
+
         # Rate limiting
         limit_req zone=api_limit burst=20 nodelay;
         limit_req_status 429;
-        
+
         # Disable buffering for real-time response
         proxy_buffering off;
     }
-    
+
     # Health check endpoint (no rate limit)
     location /health {
         proxy_pass http://download_service;
@@ -1582,13 +1643,13 @@ server {
 
 ```typescript
 // hooks/useDownload.ts
-import { useState, useEffect, useRef } from 'react';
-import * as Sentry from '@sentry/react';
+import { useState, useEffect, useRef } from "react";
+import * as Sentry from "@sentry/react";
 
 interface DownloadStatus {
   jobId: string;
   file_id: number;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
+  status: "queued" | "processing" | "completed" | "failed";
   progress: number;
   downloadUrl?: string;
   errorMessage?: string;
@@ -1611,98 +1672,99 @@ export function useDownload(): UseDownloadResult {
   const [isPolling, setIsPolling] = useState(false);
   const pollInterval = useRef<NodeJS.Timeout | null>(null);
   const abortController = useRef<AbortController | null>(null);
-  
+
   // Initiate download
   const initiate = async (fileId: number) => {
     try {
       setError(null);
       abortController.current = new AbortController();
-      
-      const response = await fetch('/v1/download/initiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+
+      const response = await fetch("/v1/download/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file_id: fileId }),
         signal: abortController.current.signal,
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to initiate download');
+        throw new Error(errorData.message || "Failed to initiate download");
       }
-      
+
       const data = await response.json();
       setStatus({ ...data, file_id: fileId, progress: 0 });
       startPolling(data.jobId);
-      
+
       // Store jobId in localStorage for recovery
       localStorage.setItem(`download_${fileId}`, data.jobId);
-      
     } catch (err: any) {
-      if (err.name === 'AbortError') return; // User cancelled
-      
-      const errorMessage = err.message || 'Failed to initiate download';
+      if (err.name === "AbortError") return; // User cancelled
+
+      const errorMessage = err.message || "Failed to initiate download";
       setError(errorMessage);
       Sentry.captureException(err, {
-        tags: { action: 'initiate_download' },
+        tags: { action: "initiate_download" },
         extra: { fileId },
       });
     }
   };
-  
+
   // Poll for status
   const startPolling = (jobId: string) => {
     setIsPolling(true);
     let consecutiveErrors = 0;
-    
+
     const poll = async () => {
       try {
         const response = await fetch(`/v1/download/status/${jobId}`, {
           signal: abortController.current?.signal,
         });
-        
+
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        
+
         const data = await response.json();
         setStatus(data);
         consecutiveErrors = 0; // Reset error count on success
-        
+
         // Stop polling when done
-        if (data.status === 'completed' || data.status === 'failed') {
+        if (data.status === "completed" || data.status === "failed") {
           stopPolling();
-          
-          if (data.status === 'completed') {
+
+          if (data.status === "completed") {
             // Auto-download
             window.location.href = data.downloadUrl;
           } else {
-            setError(data.errorMessage || 'Download failed');
+            setError(data.errorMessage || "Download failed");
           }
         }
-        
       } catch (err: any) {
-        if (err.name === 'AbortError') return; // User cancelled
-        
+        if (err.name === "AbortError") return; // User cancelled
+
         consecutiveErrors++;
-        
+
         // Stop polling after 5 consecutive errors
         if (consecutiveErrors >= 5) {
           stopPolling();
-          setError('Unable to check download status. Please refresh the page.');
-          Sentry.captureException(new Error('Polling failed after 5 attempts'), {
-            extra: { jobId, consecutiveErrors },
-          });
+          setError("Unable to check download status. Please refresh the page.");
+          Sentry.captureException(
+            new Error("Polling failed after 5 attempts"),
+            {
+              extra: { jobId, consecutiveErrors },
+            },
+          );
         }
       }
     };
-    
+
     // Initial poll immediately
     poll();
-    
+
     // Then poll every 5 seconds
     pollInterval.current = setInterval(poll, 5000);
   };
-  
+
   const stopPolling = () => {
     if (pollInterval.current) {
       clearInterval(pollInterval.current);
@@ -1710,14 +1772,14 @@ export function useDownload(): UseDownloadResult {
     }
     setIsPolling(false);
   };
-  
+
   const cancel = () => {
     abortController.current?.abort();
     stopPolling();
     setStatus(null);
     setError(null);
   };
-  
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -1725,7 +1787,7 @@ export function useDownload(): UseDownloadResult {
       stopPolling();
     };
   }, []);
-  
+
   return { status, error, isPolling, initiate, cancel };
 }
 ```
@@ -1743,11 +1805,11 @@ interface Props {
 
 export function DownloadButton({ fileId, fileName }: Props) {
   const { status, error, isPolling, initiate, cancel } = useDownload();
-  
+
   const handleClick = () => {
     initiate(fileId);
   };
-  
+
   // Error state
   if (error) {
     return (
@@ -1759,7 +1821,7 @@ export function DownloadButton({ fileId, fileName }: Props) {
       </div>
     );
   }
-  
+
   // Initial state
   if (!status) {
     return (
@@ -1768,7 +1830,7 @@ export function DownloadButton({ fileId, fileName }: Props) {
       </button>
     );
   }
-  
+
   // Queued state
   if (status.status === 'queued') {
     return (
@@ -1779,7 +1841,7 @@ export function DownloadButton({ fileId, fileName }: Props) {
       </div>
     );
   }
-  
+
   // Processing state with progress bar
   if (status.status === 'processing') {
     return (
@@ -1791,7 +1853,7 @@ export function DownloadButton({ fileId, fileName }: Props) {
       </div>
     );
   }
-  
+
   // Completed state
   if (status.status === 'completed') {
     return (
@@ -1801,7 +1863,7 @@ export function DownloadButton({ fileId, fileName }: Props) {
       </div>
     );
   }
-  
+
   // Failed state
   if (status.status === 'failed') {
     return (
@@ -1813,7 +1875,7 @@ export function DownloadButton({ fileId, fileName }: Props) {
       </div>
     );
   }
-  
+
   return null;
 }
 ```
@@ -1825,6 +1887,7 @@ export function DownloadButton({ fileId, fileName }: Props) {
 **Problem:** Job still processing on server, user loses reference
 
 **Solution:**
+
 ```typescript
 // Store jobId in localStorage
 localStorage.setItem(`download_${fileId}`, jobId);
@@ -1839,7 +1902,7 @@ useEffect(() => {
 }, [fileId]);
 
 // Clean up after completion
-if (status === 'completed') {
+if (status === "completed") {
   localStorage.removeItem(`download_${fileId}`);
 }
 ```
@@ -1849,6 +1912,7 @@ if (status === 'completed') {
 **Problem:** Polling fails due to temporary network issue
 
 **Solution:**
+
 ```typescript
 let consecutiveErrors = 0;
 
@@ -1861,7 +1925,7 @@ const poll = async () => {
     if (consecutiveErrors >= 5) {
       // Stop after 5 failures, show error
       stopPolling();
-      setError('Connection lost. Please refresh.');
+      setError("Connection lost. Please refresh.");
     }
     // Otherwise, keep polling (network might recover)
   }
@@ -1873,16 +1937,19 @@ const poll = async () => {
 **Problem:** User clicks download on multiple files
 
 **Solution:**
+
 ```typescript
 // Track multiple jobs in state
-const [activeDownloads, setActiveDownloads] = useState<Map<number, DownloadStatus>>(new Map());
+const [activeDownloads, setActiveDownloads] = useState<
+  Map<number, DownloadStatus>
+>(new Map());
 
 // Limit concurrent downloads (client-side)
 const MAX_CONCURRENT = 3;
 
 const initiate = async (fileId: number) => {
   if (activeDownloads.size >= MAX_CONCURRENT) {
-    alert('Maximum 3 downloads at once. Wait for one to complete.');
+    alert("Maximum 3 downloads at once. Wait for one to complete.");
     return;
   }
   // ... proceed ...
@@ -1894,13 +1961,14 @@ const initiate = async (fileId: number) => {
 **Problem:** User returns after 24h, jobId no longer exists
 
 **Solution:**
+
 ```typescript
 const poll = async () => {
   const response = await fetch(`/v1/download/status/${jobId}`);
-  
+
   if (response.status === 410) {
     // Job expired
-    setError('Download expired. Please request again.');
+    setError("Download expired. Please request again.");
     localStorage.removeItem(`download_${fileId}`);
     stopPolling();
   }

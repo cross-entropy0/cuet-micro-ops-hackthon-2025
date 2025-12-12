@@ -512,6 +512,78 @@ curl -X POST http://localhost:3000/v1/download/start \
   -d '{"file_id": 70000}'
 ```
 
+## CI/CD Pipeline
+
+[![CI/CD Pipeline](https://github.com/bongodev/cuet-micro-ops-hackthon-2025/actions/workflows/ci.yml/badge.svg)](https://github.com/bongodev/cuet-micro-ops-hackthon-2025/actions/workflows/ci.yml)
+
+### Pipeline Stages
+
+Our automated CI/CD pipeline runs on every push and pull request:
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│   Lint   │───▶│   Test   │───▶│  Build   │───▶│ Security │
+│ ESLint + │    │  E2E +   │    │  Docker  │    │  Trivy   │
+│ Prettier │    │Artifacts │    │  Image   │    │  Scan    │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘
+```
+
+**Pipeline Features:**
+- ✅ Automatic linting (ESLint + Prettier)
+- ✅ E2E test execution with mock S3
+- ✅ Docker production image build
+- ✅ Security vulnerability scanning (Trivy)
+- ✅ Test artifact upload on failure
+- ✅ Docker build caching for faster runs
+- ✅ Manual workflow trigger support
+
+### Running Tests Locally (Before Pushing)
+
+To avoid CI failures, run these commands locally:
+
+```bash
+# 1. Check linting
+npm run lint
+
+# 2. Check code formatting
+npm run format:check
+
+# 3. Run E2E tests
+npm run test:e2e
+
+# 4. Build Docker image
+docker build -f docker/Dockerfile.prod .
+```
+
+### Fixing CI Failures
+
+**Linting Errors:**
+```bash
+npm run lint:fix  # Auto-fix ESLint issues
+```
+
+**Formatting Errors:**
+```bash
+npm run format    # Auto-format with Prettier
+```
+
+**Test Failures:**
+```bash
+npm run test:e2e  # Run tests locally to debug
+```
+
+**Security Vulnerabilities:**
+- Check the GitHub Security tab for Trivy scan results
+- Update dependencies: `npm audit fix`
+- Review Dockerfile for base image updates
+
+### CI Environment
+
+- **Runner:** Ubuntu 24.04 with Node 24 containers
+- **Test Mode:** Mock S3 (no MinIO required in CI)
+- **Caching:** GitHub Actions cache for Docker layers
+- **Artifacts:** Test results retained for 7 days on failure
+
 ## Available Scripts
 
 ```bash

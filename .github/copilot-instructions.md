@@ -1,138 +1,162 @@
-# GitHub Copilot Instructions - CUET Micro-Ops Hackathon 2025
+# Copilot Instructions - Delineate Hackathon Challenge
 
-## Project Context
-This is a hackathon submission for CUET Micro-Ops Hackathon 2025 (Dec 12, 9 AM - 6 PM). The project is a microservices-based download service with S3 storage integration, observability, and distributed tracing.
+## Project Overview
+This is a Node.js microservice (Hono framework) simulating a real-world file download system with variable processing times (10-120s). The service demonstrates long-running operation challenges behind reverse proxies (Cloudflare timeouts, 504 errors). Built for CUET Micro-Ops Hackathon 2025.
 
-## Tech Stack
-- **Runtime**: Node.js >= 24.10.0 with native TypeScript support (`--experimental-transform-types`)
-- **Framework**: Hono v4.10.8 (ultra-fast web framework)
-- **Storage**: AWS S3 SDK v3.948.0 with MinIO compatibility
-- **Observability**: OpenTelemetry SDK v0.208.0 + Jaeger all-in-one v1.76.0, Sentry v1.2.2
-- **Validation**: Zod v4.1.13 with OpenAPI integration via @hono/zod-openapi
-- **Containerization**: Docker Compose with MinIO, Jaeger, and application services
+## Architecture
+- **Framework**: Hono (OpenAPI-based TypeScript web framework)
+- **Runtime**: Node.js 24+ with `--experimental-transform-types` (no build step, direct TS execution)
+- **Storage**: S3-compatible (MinIO/RustFS) via `@aws-sdk/client-s3`
+- **Observability**: OpenTelemetry (Jaeger) + Sentry error tracking
+- **Container Stack**: Docker Compose with minio, jaeger, and app services
 
-## Architecture Patterns
-- Microservices download service with simulated long-running operations (10-120s delays)
-- Health check endpoint with S3 connectivity verification
-- Rate limiting, CORS, security headers middleware
-- Graceful shutdown handling with OpenTelemetry trace flushing
-- S3-compatible storage (MinIO) for file management
+Key architectural pattern: Single monolithic [src/index.ts](../src/index.ts) (~687 lines) containing all routes, middleware, S3 client, and OpenTelemetry setup.
 
-## Important Conventions
+## Critical Developer Workflows
 
-### Environment Variables
-- Use Docker Compose `env_file` injection, NOT `--env-file` flag in Node scripts
-- `.env` is in `.dockerignore` - never reference it in package.json scripts
-- S3 configuration: `S3_ENDPOINT`, `S3_BUCKET_NAME`, `S3_FORCE_PATH_STYLE=true`
-
-### TypeScript Configuration
-- No build step required - uses `--experimental-transform-types` flag
-- Run directly with: `node --experimental-transform-types src/index.ts`
-- Watch mode available with `--watch` flag
-
-### Docker Compose Structure
-- `docker/compose.dev.yml` - Development with faster delays (5-15s)
-- `docker/compose.prod.yml` - Production with realistic delays (10-120s)
-- Services: `delineate-app`, `delineate-minio`, `delineate-minio-init`, `delineate-jaeger`
-- Network: `delineate-network` (bridge)
-
-### Git Workflow
-- Development branch: `rupak`
-- Local changes → push to `rupak` → pull on VM → rebuild → test
-- VM deployment: Ubuntu 22.04 on Brilliant Cloud (IP: 36.255.70.210)
-
-## Hackathon Challenges
-
-### ✅ Challenge 1: S3 Storage Integration (15 points) - COMPLETED
-- MinIO service with bucket auto-creation via `minio-init` container
-- Health endpoint returns `{"status":"healthy","checks":{"storage":"ok"}}`
-- All 29 E2E tests passing
-
-### 🎯 Challenge 3: CI/CD Pipeline (10 points) - NEXT TARGET
-- Enhance `.github/workflows/ci.yml` with:
-  - Dependency caching (actions/cache@v3)
-  - Parallel job execution for lint and test
-  - Docker build stage with docker/build-push-action
-  - Status badge in README.md
-- Must trigger on push to main/master and pull requests
-- Run linting, format check, E2E tests, build Docker image
-
-### 📋 Challenge 2: Architecture Design Document (15 points)
-- Create `ARCHITECTURE.md` in repository root
-- Document integration approach for fullstack app with variable download times
-- Choose pattern: Polling, WebSockets, or SSE
-- Include architecture diagram, API contracts, implementation plan
-
-### 🎁 Challenge 4: Observability Dashboard (10 points bonus)
-- Build React UI integrating Sentry error tracking and OpenTelemetry tracing
-- Display health status, trace IDs, error boundaries
-
-## Key Files
-
-### src/index.ts
-- Main application entry point
-- S3Client initialization (lines 53-66)
-- Health checks: `checkS3Health()` (lines 269-280), `checkS3Availability()` (lines 283-320)
-- API routes: root, health, download endpoints
-- OpenTelemetry and Sentry middleware integration
-
-### docker/compose.dev.yml
-- MinIO on ports 9000 (API), 9001 (Console)
-- Credentials: minioadmin/minioadmin
-- Bucket "downloads" auto-created with public access
-- Health checks with 10s interval
-
-### scripts/e2e-test.ts
-- Comprehensive test suite (29 tests)
-- Tests health endpoint, security headers, download flows, rate limiting
-- Run with: `npm run test:e2e`
-
-## Development Commands
+### Running the Service
 ```bash
-# Install dependencies
-npm install
-
-# Development (fast delays)
+# Development (fast delays 5-15s)
 npm run dev
 
-# Production mode (realistic delays)
-npm start
+# Production mode (realistic delays 10-120s)
+npm run start
 
-# Run E2E tests
-npm run test:e2e
-
-# Docker Compose (development)
-docker compose -f docker/compose.dev.yml up --build
-
-# Docker Compose (production)
-docker compose -f docker/compose.prod.yml up -d
+# Docker with full stack (MinIO + Jaeger)
+npm run docker:dev
 ```
 
-## Deployment Context
-- **VM Provider**: Brilliant Cloud (InterCloud Limited, Bangladesh)
-- **VM Specs**: 2 vCPU, 8GB RAM, 50GB SSD, Ubuntu 22.04 LTS
-- **Floating IP**: 36.255.70.210
-- **Open Ports**: 22 (SSH), 80 (HTTP), 3000 (API), 4318 (OTLP), 9000 (MinIO API), 9001 (MinIO Console), 16686 (Jaeger UI)
-- **Access**: SSH via `micro-ops-key.pem`, VS Code Remote-SSH enabled
+### Testing
+```bash
+# E2E tests (spins up server, runs tests, auto-cleanup)
+npm run test:e2e
+```
+E2E runner ([scripts/run-e2e.ts](../scripts/run-e2e.ts)) spawns server, waits for `/health`, executes [scripts/e2e-test.ts](../scripts/e2e-test.ts), then kills server. Tests verify storage health checks and API behavior.
 
-## Code Quality Guidelines
-- Use Zod schemas for validation with proper OpenAPI documentation
-- Implement proper error handling with Sentry integration
-- Add OpenTelemetry trace context to all operations
-- Follow Hono middleware patterns for cross-cutting concerns
-- Use proper TypeScript types (avoid implicit any)
-- Sanitize S3 keys: `downloads/${fileId}.zip` pattern
+### Manual API Testing
+```bash
+# Health check (storage connectivity)
+curl http://localhost:3000/health
 
-## Testing Requirements
-- All E2E tests must pass before submission
-- Health endpoint must verify S3 connectivity
-- Rate limiting must be enforced (100 requests per 15 minutes)
-- Security headers must be present
-- CORS must allow specified origins
+# Fast check endpoint (mock availability)
+curl -X POST http://localhost:3000/v1/download/check \
+  -H "Content-Type: application/json" \
+  -d '{"file_id": 70000}'
 
-## Scoring Strategy
-1. **Priority 1**: Challenge 3 (CI/CD) - Quick 10 points with objective criteria
-2. **Priority 2**: Challenge 2 (Architecture) - 15 points, needs quality documentation
-3. **Priority 3**: Challenge 4 (Observability) - Bonus only if time permits
+# Long-running download (will timeout at 30s by default)
+curl -X POST http://localhost:3000/v1/download/start \
+  -H "Content-Type: application/json" \
+  -d '{"file_id": 70000}'
+```
 
-Target: 40+ points for competitive standing (current: 15/50)
+## Project-Specific Conventions
+
+### Environment Configuration
+- **Validation**: All env vars validated via Zod schema at startup (lines 20-52 in [src/index.ts](../src/index.ts))
+- **Required for S3**: `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME=downloads`, `S3_FORCE_PATH_STYLE=true`
+- **Mock mode**: If `S3_BUCKET_NAME=""`, API runs in mock mode (no actual S3 calls)
+- **Delay simulation**: `DOWNLOAD_DELAY_MIN_MS` / `DOWNLOAD_DELAY_MAX_MS` control processing time in `/v1/download/start`
+
+### S3 Integration Pattern
+- **Sanitization**: S3 keys sanitized via `sanitizeS3Key()` to prevent path traversal
+- **Health checks**: `checkS3Health()` uses HEAD request on `__health_check_marker__` (NotFound = healthy bucket access)
+- **Availability**: `checkS3Availability()` checks specific file existence via HeadObjectCommand
+- **Bucket**: Must be named `downloads` (hardcoded in init containers)
+
+### Docker Compose Architecture
+- **MinIO service** (`delineate-minio`): Ports 9000 (API), 9001 (console)
+- **Init container** (`delineate-minio-init`): Creates `downloads` bucket on startup using `mc` client
+- **Service naming**: All containers prefixed `delineate-` for namespace isolation
+- **Networking**: Custom bridge network `delineate-network` enables service-to-service DNS (e.g., `http://delineate-minio:9000`)
+- **Dependencies**: App waits for `delineate-minio-init:service_completed_successfully` to ensure bucket exists
+
+### Middleware Stack (Order Matters)
+Applied in [src/index.ts](../src/index.ts) lines 87-135:
+1. Request ID injection (x-request-id header)
+2. Security headers (`secureHeaders()`)
+3. CORS with configurable origins
+4. Timeout middleware (`REQUEST_TIMEOUT_MS=30000` default)
+5. Rate limiting (IP-based via x-forwarded-for)
+6. OpenTelemetry instrumentation
+7. Sentry error capture
+
+### OpenAPI & Documentation
+- **Scalar docs**: `/docs` endpoint (dev only) - interactive API reference
+- **Schema-first**: All routes defined with `createRoute()` + Zod schemas
+- **Schema naming**: Schemas use `.openapi()` modifier for proper OpenAPI export (e.g., `DownloadCheckRequestSchema`)
+
+## Integration Points
+
+### External Dependencies
+- **Jaeger**: OpenTelemetry traces sent to `http://delineate-jaeger:4318` (OTLP HTTP)
+- **Sentry**: Error tracking via `@hono/sentry` middleware (requires `SENTRY_DSN`)
+- **MinIO/RustFS**: Self-hosted S3 storage (Challenge 1 requirement)
+
+### Service Communication
+- Container-to-container uses Docker service names (e.g., `S3_ENDPOINT=http://delineate-minio:9000`)
+- Host-to-container uses `localhost:PORT` (e.g., `http://localhost:9000`)
+
+## Common Pitfalls
+
+### TypeScript Execution
+- **No build step**: Uses Node.js 24's native TypeScript support via `--experimental-transform-types`
+- **Not a transpiler**: Doesn't support TypeScript features requiring type erasure (enums, namespaces, decorators)
+- **Watch mode**: `npm run dev` uses `--watch` flag for auto-reload
+
+### S3 Configuration
+- **forcePathStyle**: Must be `true` for MinIO/RustFS (virtual-hosted-style URLs don't work with self-hosted S3)
+- **Endpoint URL**: Must include protocol (`http://` or `https://`)
+- **Credentials**: MinIO defaults to `minioadmin:minioadmin` (change in production)
+
+### Timeout Behavior
+- **Request timeout**: Enforced at 30s via Hono middleware
+- **Download delays**: Randomized between 10-120s in production mode (demonstrates timeout problem)
+- **E2E tests**: Run with short delays to prevent CI timeouts
+
+### Health Check Logic
+- **503 vs 200**: Returns 503 when storage unhealthy (not 500) - server is running but dependencies failed
+- **Mock mode**: Always returns 200 when `S3_BUCKET_NAME=""` (no storage required)
+
+## Hackathon Context
+
+### Challenge 1: S3 Storage Integration
+Participants modify [docker/compose.dev.yml](../docker/compose.dev.yml) to add MinIO/RustFS service, configure environment variables, and ensure `/health` returns `{"status":"healthy","checks":{"storage":"ok"}}`.
+
+### Challenge 2: Architecture Design
+Document solutions for handling long-running downloads (polling, websockets, webhooks) to avoid proxy timeouts. Current `/v1/download/start` endpoint is intentionally broken for >30s operations.
+
+### Challenge 3: CI/CD Pipeline
+Extend [.github/workflows/ci.yml](../.github/workflows/ci.yml) with deployment stages.
+
+### Challenge 4: Observability (Bonus)
+Implement metrics, structured logging, or enhanced tracing beyond existing Jaeger setup.
+
+## Key Files Reference
+- [src/index.ts](../src/index.ts) - Single-file application (all routes, middleware, S3 client)
+- [docker/compose.dev.yml](../docker/compose.dev.yml) - Full development stack with MinIO + Jaeger
+- [scripts/e2e-test.ts](../scripts/e2e-test.ts) - Test assertions and validation logic
+- [scripts/run-e2e.ts](../scripts/run-e2e.ts) - Test orchestration (server lifecycle management)
+- [.env.example](../.env.example) - Complete environment variable documentation
+
+## When Modifying Code
+
+### Adding Routes
+- Use `createRoute()` with full OpenAPI schema definitions
+- Register with `app.openapi(route, handler)`
+- Add request validation via Zod schemas
+- Include error response schemas (400, 500)
+
+### Environment Variables
+- Add to `EnvSchema` (lines 20-52 in [src/index.ts](../src/index.ts))
+- Update [.env.example](../.env.example)
+- Document in README.md if user-facing
+
+### Docker Changes
+- Test with `npm run docker:dev` (builds and runs full stack)
+- Verify health checks work: `curl http://localhost:3000/health`
+- Check service logs: `docker logs delineate-app`
+
+### CI Pipeline
+- All tests run in Node 24 containers (GitHub Actions)
+- E2E tests use mock S3 mode (empty `S3_BUCKET_NAME`)
+- Docker build cached via GitHub Actions cache

@@ -128,3 +128,50 @@ jobs:
           image-ref: delineate-hackathon-challenge:${{ github.sha }}
           format: "table"
           severity: "CRITICAL,HIGH"
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-24.04
+    needs: [lint, test, build, security]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: http://36.255.70.210:3000
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H 36.255.70.210 >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy to VM
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ubuntu@36.255.70.210 'bash -s' << 'EOF'
+            set -e
+            cd cuet-micro-ops-hackthon-2025
+            
+            echo "📦 Pulling latest code..."
+            git pull origin main
+            
+            echo "🔄 Restarting services..."
+            docker-compose -f docker/compose.prod.yml down
+            docker-compose -f docker/compose.prod.yml up -d --build
+            
+            echo "⏳ Waiting for services to start..."
+            sleep 30
+            
+            echo "🏥 Running health check..."
+            if curl -f http://localhost:3000/health; then
+              echo "✅ Deployment successful!"
+            else
+              echo "❌ Health check failed!"
+              exit 1
+            fi
+          EOF
+
+      - name: Cleanup SSH
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa

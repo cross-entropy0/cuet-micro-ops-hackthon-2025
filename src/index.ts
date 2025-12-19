@@ -1,4 +1,8 @@
-import { GetObjectCommand, HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
@@ -609,40 +613,54 @@ app.openapi(downloadStartRoute, async (c) => {
   if (s3Result.available) {
     // Generate real presigned URL if S3 is configured
     let downloadUrl = `https://storage.example.com/${s3Result.s3Key ?? ""}?token=${crypto.randomUUID()}`;
-    
+
     if (env.S3_BUCKET_NAME && env.S3_ENDPOINT && s3Result.s3Key) {
       try {
         // Use public endpoint for presigned URLs if available, otherwise use S3_ENDPOINT
-        const presignEndpoint = env.S3_PUBLIC_ENDPOINT || env.S3_ENDPOINT;
-        
+        const presignEndpoint = env.S3_PUBLIC_ENDPOINT ?? env.S3_ENDPOINT;
+
+        // Require credentials for presigned URL generation
+        if (!env.S3_ACCESS_KEY_ID || !env.S3_SECRET_ACCESS_KEY) {
+          throw new Error(
+            "S3 credentials required for presigned URL generation",
+          );
+        }
+
         // Create separate S3 client with public endpoint for presigned URLs
         const presignS3Client = new S3Client({
           region: env.S3_REGION,
           endpoint: presignEndpoint,
           credentials: {
-            accessKeyId: env.S3_ACCESS_KEY_ID!,
-            secretAccessKey: env.S3_SECRET_ACCESS_KEY!,
+            accessKeyId: env.S3_ACCESS_KEY_ID,
+            secretAccessKey: env.S3_SECRET_ACCESS_KEY,
           },
           forcePathStyle: env.S3_FORCE_PATH_STYLE,
         });
-        
+
         const command = new GetObjectCommand({
           Bucket: env.S3_BUCKET_NAME,
           Key: s3Result.s3Key,
         });
-        
+
         // Generate presigned URL valid for 24 hours
-        downloadUrl = await getSignedUrl(presignS3Client, command, { 
-          expiresIn: 86400  // 24 hours in seconds
+        downloadUrl = await getSignedUrl(presignS3Client, command, {
+          expiresIn: 86400, // 24 hours in seconds
         });
-        
-        console.log(`[Download] Generated presigned URL for file_id=${String(file_id)} using endpoint: ${presignEndpoint}`);
+
+        console.log(
+          `[Download] Generated presigned URL for file_id=${String(file_id)} using endpoint: ${presignEndpoint}`,
+        );
       } catch (err) {
-        console.error(`[Download] Failed to generate presigned URL for file_id=${String(file_id)}:`, err);
+        console.error(
+          `[Download] Failed to generate presigned URL for file_id=${String(file_id)}:`,
+          err,
+        );
         // Fall back to mock URL on error
       }
     } else {
-      console.log(`[Download] Using mock URL (S3 not configured) for file_id=${String(file_id)}`);
+      console.log(
+        `[Download] Using mock URL (S3 not configured) for file_id=${String(file_id)}`,
+      );
     }
 
     return c.json(

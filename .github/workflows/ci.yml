@@ -152,20 +152,23 @@ jobs:
             set -e
             cd cuet-micro-ops-hackthon-2025
             
+            echo "� Fixing git permissions..."
+            sudo chown -R ubuntu:ubuntu .git
+            
             echo "📦 Pulling latest code..."
             git pull origin main
             
-            echo "🔄 Restarting services..."
-            docker compose -f docker/compose.prod.yml down
+            echo "🔄 Rebuilding and restarting services..."
+            docker compose -f docker/compose.prod.yml down frontend
             docker compose -f docker/compose.prod.yml build --no-cache \
               --build-arg VITE_API_URL=http://36.255.70.210:3000 \
               --build-arg VITE_SENTRY_DSN= \
               --build-arg VITE_SENTRY_ENABLED=true \
               frontend
-            docker compose -f docker/compose.prod.yml up -d --build
+            docker compose -f docker/compose.prod.yml up -d frontend
             
             echo "⏳ Waiting for services to start..."
-            sleep 30
+            sleep 15
             
             echo "🏥 Running health check..."
             if curl -f http://localhost:3000/health; then

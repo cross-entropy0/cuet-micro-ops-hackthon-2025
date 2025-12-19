@@ -23,7 +23,9 @@ export function DownloadManager() {
     setElapsedTime(0);
 
     const startTime = Date.now();
-    console.log(`[Download] Starting download for file ID: ${fileId} at ${new Date().toISOString()}`);
+    console.log(
+      `[Download] Starting download for file ID: ${fileId} at ${new Date().toISOString()}`,
+    );
 
     // Update elapsed time every second
     const timerInterval = setInterval(() => {
@@ -39,8 +41,11 @@ export function DownloadManager() {
       const finalElapsed = Math.floor((Date.now() - startTime) / 1000);
       setElapsedTime(finalElapsed);
 
-      console.log(`[Download] Response received after ${finalElapsed}s:`, response.data);
-      
+      console.log(
+        `[Download] Response received after ${finalElapsed}s:`,
+        response.data,
+      );
+
       if (response.data.downloadUrl) {
         console.log(`[Download] Download URL: ${response.data.downloadUrl}`);
       }

@@ -366,14 +366,14 @@ const checkS3Availability = async (
 
 // S3 list all files
 const listS3Files = async (): Promise<
-  Array<{
+  {
     key: string;
     fileName: string;
     fileId: number | null;
     size: number;
     lastModified: string;
     extension: string;
-  }>
+  }[]
 > => {
   // If no bucket configured, return mock data
   if (!env.S3_BUCKET_NAME) {
@@ -409,10 +409,10 @@ const listS3Files = async (): Promise<
       response.Contents?.map((obj) => {
         const key = obj.Key ?? "";
         const fileName = key.split("/").pop() ?? key;
-        const fileIdMatch = fileName.match(/^(\d+)\./);
+        const fileIdMatch = /^(\d+)\./.exec(fileName);
         const fileId = fileIdMatch ? parseInt(fileIdMatch[1], 10) : null;
         const extension = fileName.includes(".")
-          ? `.${fileName.split(".").pop()}`
+          ? `.${String(fileName.split(".").pop())}`
           : "";
 
         return {
@@ -789,7 +789,8 @@ const fileListRoute = createRoute({
   path: "/v1/files",
   tags: ["Files"],
   summary: "List all files",
-  description: "Returns a list of all files available in the storage bucket with metadata",
+  description:
+    "Returns a list of all files available in the storage bucket with metadata",
   responses: {
     200: {
       description: "File list retrieved successfully",

@@ -156,8 +156,8 @@ jobs:
             git pull origin main
             
             echo "🔄 Restarting services..."
-            docker-compose -f docker/compose.prod.yml down
-            docker-compose -f docker/compose.prod.yml up -d --build
+            docker compose -f docker/compose.prod.yml down
+            docker compose -f docker/compose.prod.yml up -d --build
             
             echo "⏳ Waiting for services to start..."
             sleep 30

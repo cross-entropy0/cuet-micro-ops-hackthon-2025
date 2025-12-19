@@ -275,7 +275,8 @@ const sanitizeS3Key = (fileId: number): string => {
   // Ensure fileId is a valid integer within bounds (already validated by Zod)
   const sanitizedId = Math.floor(Math.abs(fileId));
   // Construct safe S3 key without user-controlled path components
-  return `downloads/${String(sanitizedId)}.zip`;
+  // Files are stored at bucket root (bucket is already named "downloads")
+  return `${String(sanitizedId)}.zip`;
 };
 
 // S3 health check

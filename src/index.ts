@@ -37,6 +37,7 @@ const EnvSchema = z.object({
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
   S3_ENDPOINT: optionalUrl,
+  S3_PUBLIC_ENDPOINT: optionalUrl,
   S3_BUCKET_NAME: z.string().default(""),
   S3_FORCE_PATH_STYLE: z.coerce.boolean().default(false),
   SENTRY_DSN: optionalUrl,
@@ -611,17 +612,31 @@ app.openapi(downloadStartRoute, async (c) => {
     
     if (env.S3_BUCKET_NAME && env.S3_ENDPOINT && s3Result.s3Key) {
       try {
+        // Use public endpoint for presigned URLs if available, otherwise use S3_ENDPOINT
+        const presignEndpoint = env.S3_PUBLIC_ENDPOINT || env.S3_ENDPOINT;
+        
+        // Create separate S3 client with public endpoint for presigned URLs
+        const presignS3Client = new S3Client({
+          region: env.S3_REGION,
+          endpoint: presignEndpoint,
+          credentials: {
+            accessKeyId: env.S3_ACCESS_KEY_ID!,
+            secretAccessKey: env.S3_SECRET_ACCESS_KEY!,
+          },
+          forcePathStyle: env.S3_FORCE_PATH_STYLE,
+        });
+        
         const command = new GetObjectCommand({
           Bucket: env.S3_BUCKET_NAME,
           Key: s3Result.s3Key,
         });
         
         // Generate presigned URL valid for 24 hours
-        downloadUrl = await getSignedUrl(s3Client, command, { 
+        downloadUrl = await getSignedUrl(presignS3Client, command, { 
           expiresIn: 86400  // 24 hours in seconds
         });
         
-        console.log(`[Download] Generated presigned URL for file_id=${String(file_id)}`);
+        console.log(`[Download] Generated presigned URL for file_id=${String(file_id)} using endpoint: ${presignEndpoint}`);
       } catch (err) {
         console.error(`[Download] Failed to generate presigned URL for file_id=${String(file_id)}:`, err);
         // Fall back to mock URL on error

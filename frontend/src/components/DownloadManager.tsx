@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Download, CheckCircle, XCircle } from "lucide-react";
 import { apiClient } from "../lib/api";
 import { trackUserAction } from "../lib/telemetry";
+import FileList from "./FileList";
 
 interface DownloadResult {
   fileId: number;
@@ -16,6 +17,14 @@ export function DownloadManager() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DownloadResult | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
+
+  const handleFileSelect = (selectedFileId: number) => {
+    setFileId(selectedFileId.toString());
+    // Scroll to download form
+    document
+      .getElementById("download-form")
+      ?.scrollIntoView({ behavior: "smooth" });
+  };
 
   const handleDownload = async () => {
     setLoading(true);
@@ -94,7 +103,7 @@ export function DownloadManager() {
   };
 
   return (
-    <div>
+    <div id="download-form">
       <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1.5rem" }}>
         <input
           type="number"
@@ -188,7 +197,7 @@ export function DownloadManager() {
                   marginBottom: "0.5rem",
                 }}
               >
-                This may take 10-200 seconds. Please wait...
+                Processing your download request...
               </div>
               <div
                 style={{
@@ -321,6 +330,11 @@ export function DownloadManager() {
           </div>
         </div>
       )}
+
+      {/* File List */}
+      <div style={{ marginTop: "2rem" }}>
+        <FileList onFileSelect={handleFileSelect} />
+      </div>
     </div>
   );
 }

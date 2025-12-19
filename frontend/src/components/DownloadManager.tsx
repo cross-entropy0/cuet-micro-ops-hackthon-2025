@@ -15,31 +15,35 @@ export function DownloadManager() {
   const [fileId, setFileId] = useState("70000");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DownloadResult | null>(null);
-  const [progress, setProgress] = useState(0);
+  const [elapsedTime, setElapsedTime] = useState(0);
 
   const handleDownload = async () => {
     setLoading(true);
     setResult(null);
-    setProgress(0);
+    setElapsedTime(0);
 
-    // Simulate progress bar (fake progress)
-    const progressInterval = setInterval(() => {
-      setProgress((prev) => {
-        // Slow down as it approaches 95% (never reaches 100 until actually done)
-        if (prev < 60) return prev + 8;
-        if (prev < 80) return prev + 4;
-        if (prev < 90) return prev + 2;
-        return Math.min(prev + 0.5, 95);
-      });
-    }, 2000); // Update every 2 seconds
+    const startTime = Date.now();
+    console.log(`[Download] Starting download for file ID: ${fileId} at ${new Date().toISOString()}`);
+
+    // Update elapsed time every second
+    const timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      setElapsedTime(elapsed);
+    }, 1000);
 
     try {
       const id = parseInt(fileId);
       const response = await apiClient.startDownload(id);
 
-      // Complete progress bar
-      clearInterval(progressInterval);
-      setProgress(100);
+      clearInterval(timerInterval);
+      const finalElapsed = Math.floor((Date.now() - startTime) / 1000);
+      setElapsedTime(finalElapsed);
+
+      console.log(`[Download] Response received after ${finalElapsed}s:`, response.data);
+      
+      if (response.data.downloadUrl) {
+        console.log(`[Download] Download URL: ${response.data.downloadUrl}`);
+      }
 
       // Track user action with Sentry v8 API
       trackUserAction("download.initiate", {
@@ -47,6 +51,7 @@ export function DownloadManager() {
         timestamp: new Date().toISOString(),
         processingTimeMs: response.data.processingTimeMs,
         status: "success",
+        elapsedTime: finalElapsed,
       });
 
       setResult({
@@ -57,9 +62,11 @@ export function DownloadManager() {
         downloadUrl: response.data.downloadUrl,
       });
     } catch (error: any) {
-      // Stop progress bar on error
-      clearInterval(progressInterval);
-      setProgress(0);
+      clearInterval(timerInterval);
+      const finalElapsed = Math.floor((Date.now() - startTime) / 1000);
+      setElapsedTime(finalElapsed);
+
+      console.error(`[Download] Error after ${finalElapsed}s:`, error.message);
 
       // Track error with Sentry v8 API
       trackUserAction("download.initiate", {
@@ -67,6 +74,7 @@ export function DownloadManager() {
         timestamp: new Date().toISOString(),
         status: "error",
         error: error.message,
+        elapsedTime: finalElapsed,
       });
 
       setResult({
@@ -75,7 +83,7 @@ export function DownloadManager() {
         message: error.message || "Download failed",
       });
     } finally {
-      clearInterval(progressInterval);
+      clearInterval(timerInterval);
       setLoading(false);
     }
   };
@@ -135,81 +143,62 @@ export function DownloadManager() {
 
       {loading && (
         <div style={{ marginBottom: "1rem" }}>
-          {/* Progress Bar */}
+          {/* Loading State with Elapsed Time */}
           <div
             style={{
-              marginBottom: "0.75rem",
-              padding: "0 0.5rem",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                marginBottom: "0.5rem",
-                fontSize: "0.875rem",
-                fontWeight: "600",
-                color: "#6366f1",
-              }}
-            >
-              <span>Processing...</span>
-              <span>{Math.round(progress)}%</span>
-            </div>
-            <div
-              style={{
-                width: "100%",
-                height: "8px",
-                background: "#e5e7eb",
-                borderRadius: "9999px",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  height: "100%",
-                  width: `${progress}%`,
-                  background:
-                    "linear-gradient(90deg, #6366f1 0%, #8b5cf6 100%)",
-                  borderRadius: "9999px",
-                  transition: "width 0.5s ease-out",
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Status Message */}
-          <div
-            style={{
-              padding: "1rem",
+              padding: "1.25rem",
               background: "linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)",
               borderRadius: "12px",
               border: "2px solid #fcd34d",
               display: "flex",
               alignItems: "center",
-              gap: "0.75rem",
+              gap: "1rem",
             }}
           >
             <div
               className="spinner"
               style={{
-                width: "20px",
-                height: "20px",
-                borderWidth: "2px",
+                width: "24px",
+                height: "24px",
+                borderWidth: "3px",
                 borderColor: "#f59e0b transparent transparent transparent",
+                flexShrink: 0,
               }}
             ></div>
-            <div>
+            <div style={{ flex: 1 }}>
               <div
                 style={{
-                  fontWeight: "600",
+                  fontWeight: "700",
                   color: "#92400e",
-                  marginBottom: "0.25rem",
+                  marginBottom: "0.5rem",
+                  fontSize: "1rem",
                 }}
               >
-                Processing Download
+                Processing Download...
               </div>
-              <div style={{ fontSize: "0.75rem", color: "#78350f" }}>
-                This may take 10-200 seconds...
+              <div
+                style={{
+                  fontSize: "0.875rem",
+                  color: "#78350f",
+                  marginBottom: "0.5rem",
+                }}
+              >
+                This may take 10-200 seconds. Please wait...
+              </div>
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  padding: "0.375rem 0.75rem",
+                  background: "rgba(255, 255, 255, 0.5)",
+                  borderRadius: "6px",
+                  fontSize: "0.875rem",
+                  fontWeight: "600",
+                  color: "#92400e",
+                }}
+              >
+                ⏱️ Elapsed: {elapsedTime}s
               </div>
             </div>
           </div>

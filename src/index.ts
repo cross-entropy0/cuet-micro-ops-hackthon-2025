@@ -1,4 +1,5 @@
-import { HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
 import { httpInstrumentationMiddleware } from "@hono/otel";
@@ -605,11 +606,35 @@ app.openapi(downloadStartRoute, async (c) => {
   );
 
   if (s3Result.available) {
+    // Generate real presigned URL if S3 is configured
+    let downloadUrl = `https://storage.example.com/${s3Result.s3Key ?? ""}?token=${crypto.randomUUID()}`;
+    
+    if (env.S3_BUCKET_NAME && env.S3_ENDPOINT && s3Result.s3Key) {
+      try {
+        const command = new GetObjectCommand({
+          Bucket: env.S3_BUCKET_NAME,
+          Key: s3Result.s3Key,
+        });
+        
+        // Generate presigned URL valid for 24 hours
+        downloadUrl = await getSignedUrl(s3Client, command, { 
+          expiresIn: 86400  // 24 hours in seconds
+        });
+        
+        console.log(`[Download] Generated presigned URL for file_id=${String(file_id)}`);
+      } catch (err) {
+        console.error(`[Download] Failed to generate presigned URL for file_id=${String(file_id)}:`, err);
+        // Fall back to mock URL on error
+      }
+    } else {
+      console.log(`[Download] Using mock URL (S3 not configured) for file_id=${String(file_id)}`);
+    }
+
     return c.json(
       {
         file_id,
         status: "completed" as const,
-        downloadUrl: `https://storage.example.com/${s3Result.s3Key ?? ""}?token=${crypto.randomUUID()}`,
+        downloadUrl,
         size: s3Result.size,
         processingTimeMs,
         message: `Download ready after ${(processingTimeMs / 1000).toFixed(1)} seconds`,

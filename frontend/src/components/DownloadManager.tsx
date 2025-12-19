@@ -20,10 +20,14 @@ export function DownloadManager() {
 
   const handleFileSelect = (selectedFileId: number) => {
     setFileId(selectedFileId.toString());
-    // Scroll to download form
+    // Scroll to download form and trigger download
     document
       .getElementById("download-form")
       ?.scrollIntoView({ behavior: "smooth" });
+    // Trigger download after a short delay to show the form
+    setTimeout(() => {
+      handleDownload();
+    }, 500);
   };
 
   const handleDownload = async () => {

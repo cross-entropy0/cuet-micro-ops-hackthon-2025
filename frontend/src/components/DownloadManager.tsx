@@ -15,14 +15,31 @@ export function DownloadManager() {
   const [fileId, setFileId] = useState("70000");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DownloadResult | null>(null);
+  const [progress, setProgress] = useState(0);
 
   const handleDownload = async () => {
     setLoading(true);
     setResult(null);
+    setProgress(0);
+
+    // Simulate progress bar (fake progress)
+    const progressInterval = setInterval(() => {
+      setProgress((prev) => {
+        // Slow down as it approaches 95% (never reaches 100 until actually done)
+        if (prev < 60) return prev + 8;
+        if (prev < 80) return prev + 4;
+        if (prev < 90) return prev + 2;
+        return Math.min(prev + 0.5, 95);
+      });
+    }, 2000); // Update every 2 seconds
 
     try {
       const id = parseInt(fileId);
       const response = await apiClient.startDownload(id);
+
+      // Complete progress bar
+      clearInterval(progressInterval);
+      setProgress(100);
 
       // Track user action with Sentry v8 API
       trackUserAction("download.initiate", {
@@ -40,6 +57,10 @@ export function DownloadManager() {
         downloadUrl: response.data.downloadUrl,
       });
     } catch (error: any) {
+      // Stop progress bar on error
+      clearInterval(progressInterval);
+      setProgress(0);
+
       // Track error with Sentry v8 API
       trackUserAction("download.initiate", {
         fileId: parseInt(fileId),
@@ -54,6 +75,7 @@ export function DownloadManager() {
         message: error.message || "Download failed",
       });
     } finally {
+      clearInterval(progressInterval);
       setLoading(false);
     }
   };
@@ -112,39 +134,83 @@ export function DownloadManager() {
       </div>
 
       {loading && (
-        <div
-          style={{
-            padding: "1rem",
-            background: "linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)",
-            borderRadius: "12px",
-            border: "2px solid #fcd34d",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.75rem",
-            marginBottom: "1rem",
-          }}
-        >
+        <div style={{ marginBottom: "1rem" }}>
+          {/* Progress Bar */}
           <div
-            className="spinner"
             style={{
-              width: "20px",
-              height: "20px",
-              borderWidth: "2px",
-              borderColor: "#f59e0b transparent transparent transparent",
+              marginBottom: "0.75rem",
+              padding: "0 0.5rem",
             }}
-          ></div>
-          <div>
+          >
             <div
               style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginBottom: "0.5rem",
+                fontSize: "0.875rem",
                 fontWeight: "600",
-                color: "#92400e",
-                marginBottom: "0.25rem",
+                color: "#6366f1",
               }}
             >
-              Processing Download
+              <span>Processing...</span>
+              <span>{Math.round(progress)}%</span>
             </div>
-            <div style={{ fontSize: "0.75rem", color: "#78350f" }}>
-              This may take 10-200 seconds...
+            <div
+              style={{
+                width: "100%",
+                height: "8px",
+                background: "#e5e7eb",
+                borderRadius: "9999px",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${progress}%`,
+                  background:
+                    "linear-gradient(90deg, #6366f1 0%, #8b5cf6 100%)",
+                  borderRadius: "9999px",
+                  transition: "width 0.5s ease-out",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Status Message */}
+          <div
+            style={{
+              padding: "1rem",
+              background: "linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)",
+              borderRadius: "12px",
+              border: "2px solid #fcd34d",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.75rem",
+            }}
+          >
+            <div
+              className="spinner"
+              style={{
+                width: "20px",
+                height: "20px",
+                borderWidth: "2px",
+                borderColor: "#f59e0b transparent transparent transparent",
+              }}
+            ></div>
+            <div>
+              <div
+                style={{
+                  fontWeight: "600",
+                  color: "#92400e",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                Processing Download
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#78350f" }}>
+                This may take 10-200 seconds...
+              </div>
             </div>
           </div>
         </div>

@@ -54,9 +54,9 @@ const EnvSchema = z.object({
     .default("*")
     .transform((val) => (val === "*" ? "*" : val.split(","))),
   // Download delay simulation (in milliseconds)
-  DOWNLOAD_DELAY_MIN_MS: z.coerce.number().int().min(0).default(10000), // 10 seconds
-  DOWNLOAD_DELAY_MAX_MS: z.coerce.number().int().min(0).default(200000), // 200 seconds
-  DOWNLOAD_DELAY_ENABLED: z.coerce.boolean().default(true),
+  DOWNLOAD_DELAY_MIN_MS: z.coerce.number().int().min(0).default(0), // No delay
+  DOWNLOAD_DELAY_MAX_MS: z.coerce.number().int().min(0).default(0), // No delay
+  DOWNLOAD_DELAY_ENABLED: z.coerce.boolean().default(false),
 });
 
 // Parse and validate environment
@@ -270,6 +270,32 @@ const DownloadStartResponseSchema = z
   })
   .openapi("DownloadStartResponse");
 
+const FileItemSchema = z
+  .object({
+    key: z.string().openapi({ description: "S3 object key" }),
+    fileName: z.string().openapi({ description: "File name" }),
+    fileId: z
+      .number()
+      .int()
+      .nullable()
+      .openapi({ description: "Extracted file ID if parseable" }),
+    size: z.number().int().openapi({ description: "File size in bytes" }),
+    lastModified: z
+      .string()
+      .openapi({ description: "Last modified date (ISO 8601)" }),
+    extension: z
+      .string()
+      .openapi({ description: "File extension (e.g., .zip, .pdf)" }),
+  })
+  .openapi("FileItem");
+
+const FileListResponseSchema = z
+  .object({
+    files: z.array(FileItemSchema),
+    total: z.number().int(),
+  })
+  .openapi("FileListResponse");
+
 // Input sanitization for S3 keys - prevent path traversal
 const sanitizeS3Key = (fileId: number): string => {
   // Ensure fileId is a valid integer within bounds (already validated by Zod)
@@ -335,6 +361,73 @@ const checkS3Availability = async (
       s3Key: null,
       size: null,
     };
+  }
+};
+
+// S3 list all files
+const listS3Files = async (): Promise<
+  Array<{
+    key: string;
+    fileName: string;
+    fileId: number | null;
+    size: number;
+    lastModified: string;
+    extension: string;
+  }>
+> => {
+  // If no bucket configured, return mock data
+  if (!env.S3_BUCKET_NAME) {
+    return [
+      {
+        key: "downloads/70000.zip",
+        fileName: "70000.zip",
+        fileId: 70000,
+        size: 258939,
+        lastModified: new Date().toISOString(),
+        extension: ".zip",
+      },
+      {
+        key: "downloads/20000.pdf",
+        fileName: "20000.pdf",
+        fileId: 20000,
+        size: 1990000,
+        lastModified: new Date().toISOString(),
+        extension: ".pdf",
+      },
+    ];
+  }
+
+  try {
+    const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+    const command = new ListObjectsV2Command({
+      Bucket: env.S3_BUCKET_NAME,
+      Prefix: "downloads/",
+    });
+    const response = await s3Client.send(command);
+
+    const files =
+      response.Contents?.map((obj) => {
+        const key = obj.Key ?? "";
+        const fileName = key.split("/").pop() ?? key;
+        const fileIdMatch = fileName.match(/^(\d+)\./);
+        const fileId = fileIdMatch ? parseInt(fileIdMatch[1], 10) : null;
+        const extension = fileName.includes(".")
+          ? `.${fileName.split(".").pop()}`
+          : "";
+
+        return {
+          key,
+          fileName,
+          fileId,
+          size: obj.Size ?? 0,
+          lastModified: obj.LastModified?.toISOString() ?? "",
+          extension,
+        };
+      }) ?? [];
+
+    return files;
+  } catch {
+    return [];
   }
 };
 
@@ -688,6 +781,44 @@ app.openapi(downloadStartRoute, async (c) => {
       200,
     );
   }
+});
+
+// File List Route - lists all available files in storage
+const fileListRoute = createRoute({
+  method: "get",
+  path: "/v1/files",
+  tags: ["Files"],
+  summary: "List all files",
+  description: "Returns a list of all files available in the storage bucket with metadata",
+  responses: {
+    200: {
+      description: "File list retrieved successfully",
+      content: {
+        "application/json": {
+          schema: FileListResponseSchema,
+        },
+      },
+    },
+    500: {
+      description: "Internal server error",
+      content: {
+        "application/json": {
+          schema: ErrorResponseSchema,
+        },
+      },
+    },
+  },
+});
+
+app.openapi(fileListRoute, async (c) => {
+  const files = await listS3Files();
+  return c.json(
+    {
+      files,
+      total: files.length,
+    },
+    200,
+  );
 });
 
 // OpenAPI spec endpoint (disabled in production)
